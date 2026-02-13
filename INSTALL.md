@@ -963,3 +963,53 @@ python scripts/screen_library.py \
 ### Style contract (mandatory)
 
 Step 12 figures are SVG-only with editable text (`savefig.format="svg"`, `svg.fonttype="none"`), use Times New Roman, and force bold titles/labels/ticks/legend with Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
+
+## Step 13 — Screening Analysis (Hit triage, novelty, diversity, AD/BBB, series discovery)
+
+### Objective
+
+Given `outputs/screening/<TARGET>/<screen_id>/ranking/ranked_*.parquet`, generate manuscript-grade hit triage with quality diagnostics, novelty vs training, diversity-aware selection, risk-controlled filters, liability flags, and chemotype series discovery.
+
+### Inputs
+
+Required:
+- `--screen_dir outputs/screening/<TARGET>/<screen_id>`
+- `--train_parquet data/processed/environments/<TARGET>/data/multienv_compound_level.parquet`
+
+Optional:
+- ranking files if present: `ranking/ranked_all.parquet`, `ranking/ranked_cns_like_in_domain.parquet`
+- style/selection controls (`--topk`, `--diverse_k`, thresholds, SVG style args)
+
+### Outputs
+
+`outputs/screening_analysis/<TARGET>/<screen_id>/`
+- `reports/screening_summary.csv`, `novelty_report.csv`, `scaffold_novelty.csv`, `clustering_summary.csv`, `diversity_selection.csv`, `risk_controlled_selection.csv`, `property_liability_flags.csv`, `series_discovery.csv`
+- `selections/top50_risk_controlled.csv`, `top100_diverse.csv`, `top200_cns_diverse.csv`, `chemotype_leads.csv`
+- `figures/fig_hit_score_distribution.svg`, `fig_hit_uncertainty_distribution.svg`, `fig_pareto_score_uncertainty.svg`, `fig_pareto_score_cns.svg`, `fig_score_vs_ad.svg`, `fig_scaffold_novelty.svg`, `fig_cluster_sizes.svg`, `fig_diversity_tradeoff.svg`, `fig_property_distributions_topk.svg`, `fig_triage_score_uncertainty_ad.svg`
+- `figure_data/hit_score_distribution.csv`, `hit_uncertainty_distribution.csv`, `pareto_score_uncertainty.csv`, `pareto_score_cns.csv`, `score_vs_ad.csv`, `scaffold_novelty_plot.csv`, `cluster_sizes_plot.csv`, `diversity_tradeoff_plot.csv`, `property_distributions_topk.csv`, `triage_score_uncertainty_ad.csv`
+- `provenance/run_config.json`, `provenance.json`, `environment.txt`
+
+### Run Step 13
+
+```bash
+python scripts/analyze_screening.py \
+  --target CHEMBL335 \
+  --screen_dir outputs/screening/CHEMBL335/zinc_screen_v1 \
+  --train_parquet data/processed/environments/CHEMBL335/data/multienv_compound_level.parquet \
+  --outdir outputs/screening_analysis/CHEMBL335/zinc_screen_v1 \
+  --topk 500 \
+  --diverse_k 100 \
+  --cluster_method butina \
+  --cluster_threshold 0.65 \
+  --risk_control true \
+  --score_threshold 7.0 \
+  --uncertainty_threshold 0.25 \
+  --ad_threshold 0.35 \
+  --cns_mpo_threshold 4.0 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Style contract (mandatory)
+
+All Step 13 figures are SVG-only with editable text (`savefig.format="svg"`, `svg.fonttype="none"`), use Times New Roman, force bold text, and use Nature palette.
