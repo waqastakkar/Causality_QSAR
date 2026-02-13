@@ -187,3 +187,101 @@ python scripts/qsar_postprocess_report.py \
 ```
 
 All Step 2 figures are emitted as SVG (editable text, not paths) with `svg.fonttype=none`, Times New Roman, bold text (titles/labels/ticks/legend), and a fixed colorblind-friendly Nature palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
+
+## Step 3 — Assemble multi-environment dataset + validate domain shift + latent environment discovery
+
+### Step 3 output structure
+
+```text
+data/processed/environments/<TARGET>/
+├─ data/
+│  ├─ multienv_row_level.parquet
+│  ├─ multienv_compound_level.parquet
+│  ├─ env_definitions.json
+│  ├─ env_vector_schema.json
+│  ├─ env_counts.csv
+│  ├─ series_assignments.csv
+│  ├─ learned_env_assignments.csv
+│  ├─ learned_env_feature_matrix.parquet
+│  └─ learned_env_scaler.json
+├─ reports/
+│  ├─ shift_metrics.csv
+│  ├─ env_predictability.csv
+│  ├─ scaffold_overlap.csv
+│  ├─ label_shift.csv
+│  ├─ missingness_by_env.csv
+│  ├─ alignment_metrics.csv
+│  ├─ cluster_profiles.csv
+│  ├─ cluster_purity.csv
+│  └─ clustering_stability.csv
+├─ figures/
+│  ├─ fig_env_counts.svg
+│  ├─ fig_label_distribution_by_env.svg
+│  ├─ fig_active_rate_by_env.svg
+│  ├─ fig_scaffold_overlap_heatmap.svg
+│  ├─ fig_shift_metrics.svg
+│  ├─ fig_env_predictability.svg
+│  ├─ fig_cluster_sizes.svg
+│  ├─ fig_cluster_profiles.svg
+│  ├─ fig_alignment_ari_nmi.svg
+│  └─ fig_manual_vs_learned_contingency.svg
+└─ provenance/
+   ├─ run_config.json
+   ├─ provenance.json
+   └─ environment.txt
+```
+
+### 3.1 Create folders
+
+```bash
+mkdir -p data/processed/environments/CHEMBLXXXX/{data,reports,figures,provenance}
+```
+
+### 3.2 Assemble explicit environments
+
+```bash
+python scripts/assemble_environments.py \
+  --target CHEMBLXXXX \
+  --row_level_csv data/processed/qsar/CHEMBLXXXX/data/row_level_with_pIC50.csv \
+  --compound_level_csv data/processed/qsar/CHEMBLXXXX/data/compound_level_with_properties.csv \
+  --raw_extract_csv data/interim/extracts/CHEMBLXXXX/CHEMBLXXXX_raw.csv \
+  --outdir data/processed/environments/CHEMBLXXXX/data \
+  --env_keys assay_type species readout publication chemistry_regime series \
+  --bbb_rules configs/bbb_rules.yaml \
+  --series_rules configs/series_rules.yaml
+```
+
+### 3.3 Validate environment shift and leakage risk
+
+```bash
+python scripts/env_validation_report.py \
+  --input_dir data/processed/environments/CHEMBLXXXX/data \
+  --outdir data/processed/environments/CHEMBLXXXX \
+  --svg \
+  --font "Times New Roman" \
+  --bold_text \
+  --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### 3.4 Latent environment discovery (unsupervised domains)
+
+Use learned environments to verify domain structure, test alignment with manual environments, and detect hidden assay/publication regimes.
+
+```bash
+python scripts/latent_env_discovery.py \
+  --input_compound_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --outdir data/processed/environments/CHEMBLXXXX \
+  --features MW LogP TPSA HBD HBA RotB Rings \
+  --method kmeans \
+  --k_min 3 --k_max 12 \
+  --select_by silhouette \
+  --random_seed 42 \
+  --svg \
+  --font "Times New Roman" \
+  --bold_text \
+  --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+All Step 3 figures are SVG only with editable text (`svg.fonttype=none`), Times New Roman font, bold text for titles/labels/ticks/legends, configurable font sizes, and the fixed Nature palette: `#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
