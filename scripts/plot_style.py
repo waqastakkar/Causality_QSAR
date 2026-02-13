@@ -57,6 +57,14 @@ def configure_matplotlib(style: PlotStyle, svg: bool = True) -> None:
     mpl.rcParams["axes.labelweight"] = "bold" if style.bold_text else "normal"
     mpl.rcParams["axes.titleweight"] = "bold" if style.bold_text else "normal"
     mpl.rcParams["axes.prop_cycle"] = mpl.cycler(color=list(style.palette))
+    mpl.rcParams["font.size"] = style.font_label
+    mpl.rcParams["axes.titlesize"] = style.font_title
+    mpl.rcParams["axes.labelsize"] = style.font_label
+    mpl.rcParams["xtick.labelsize"] = style.font_tick
+    mpl.rcParams["ytick.labelsize"] = style.font_tick
+    mpl.rcParams["legend.fontsize"] = style.font_legend
+    mpl.rcParams["axes.titleweight"] = "bold" if style.bold_text else "normal"
+    mpl.rcParams["xtick.major.width"] = 1.0
 
 
 def style_axis(ax, style: PlotStyle, title: str | None = None, xlabel: str | None = None, ylabel: str | None = None) -> None:
