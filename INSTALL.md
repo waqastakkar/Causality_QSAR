@@ -668,3 +668,99 @@ python scripts/make_paper_figures.py \
 ```
 
 All Step 7/8 figures are SVG-only with editable text (`svg.fonttype=none`), Times New Roman, bold typography, and the Nature 5-color palette through `scripts/plot_style.py`.
+
+## Step 9 — Cross-endpoint externalization (IC50 regression → Inhibition % classification)
+
+### Purpose
+
+Step 9 performs strict cross-endpoint externalization by training on IC50 regression (Steps 5–6) and evaluating on an external Inhibition (%) set as binary classification, using the regression output (`pIC50_hat`) as the scoring function without retraining.
+
+### Output structures
+
+Preparation output:
+
+```text
+data/external/processed/ptp1b_inhibition_chembl335/
+├─ data/
+│  ├─ inhibition_raw_parsed.parquet
+│  ├─ inhibition_clean.parquet
+│  ├─ inhibition_dedup_internal.parquet
+│  └─ inhibition_external_final.parquet
+├─ reports/
+│  ├─ parsing_summary.csv
+│  ├─ value_sanity.csv
+│  ├─ overlap_with_ic50.csv
+│  ├─ overlap_by_split_membership.csv
+│  └─ shift_vs_ic50_train.csv
+├─ figures/
+│  ├─ fig_inhibition_value_distribution.svg
+│  ├─ fig_overlap_breakdown.svg
+│  └─ fig_shift_vs_ic50_train.svg
+└─ provenance/
+   ├─ run_config.json
+   ├─ provenance.json
+   └─ environment.txt
+```
+
+Evaluation output:
+
+```text
+outputs/evaluation_cross_endpoint/<TARGET>/<eval_id>/
+├─ predictions/
+│  ├─ external_predictions.parquet
+│  └─ external_scored.parquet
+├─ reports/
+│  ├─ cross_endpoint_metrics.csv
+│  ├─ threshold_sensitivity.csv
+│  ├─ calibration_external.csv
+│  ├─ cns_stratified_metrics.csv
+│  └─ cf_consistency_external.csv
+├─ figures/
+│  ├─ fig_cross_endpoint_roc.svg
+│  ├─ fig_cross_endpoint_pr.svg
+│  ├─ fig_threshold_sensitivity.svg
+│  ├─ fig_calibration_external.svg
+│  └─ fig_cns_stratified_external.svg
+└─ provenance/
+   ├─ run_config.json
+   ├─ provenance.json
+   └─ environment.txt
+```
+
+### Run Step 9
+
+Prepare external inhibition dataset with strict leakage removal:
+
+```bash
+python scripts/prepare_inhibition_external.py \
+  --target CHEMBL335 \
+  --input_csv data/external/raw/ptp1b_inhibition_chembl335.csv \
+  --ic50_parquet data/processed/environments/CHEMBL335/data/multienv_compound_level.parquet \
+  --splits_dir data/processed/splits/CHEMBL335/splits \
+  --split_name scaffold_bm \
+  --outdir data/external/processed/ptp1b_inhibition_chembl335 \
+  --inhib_threshold 50 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+Evaluate trained regression model on external inhibition set:
+
+```bash
+python scripts/evaluate_cross_endpoint.py \
+  --target CHEMBL335 \
+  --run_dir outputs/runs/CHEMBL335/scaffold_bm/<RUN_ID> \
+  --checkpoint checkpoints/best.pt \
+  --external_parquet data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet \
+  --outdir outputs/evaluation_cross_endpoint/CHEMBL335/inhib_ext_v1 \
+  --pIC50_threshold 6.0 \
+  --threshold_grid 5.0 5.5 6.0 6.5 7.0 \
+  --enable_calibration false \
+  --bbb_parquet data/processed/bbb/CHEMBL335/data/bbb_annotations.parquet \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Figure style contract (mandatory)
+
+All Step 9 figures are SVG-only with editable text (`matplotlib.rcParams['savefig.format']='svg'`, `matplotlib.rcParams['svg.fonttype']='none'`), use Times New Roman globally, enforce bold text for titles/labels/ticks/legend, expose CLI-configurable font sizes, and use the Nature 5-color palette: `#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
