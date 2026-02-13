@@ -764,3 +764,56 @@ python scripts/evaluate_cross_endpoint.py \
 ### Figure style contract (mandatory)
 
 All Step 9 figures are SVG-only with editable text (`matplotlib.rcParams['savefig.format']='svg'`, `matplotlib.rcParams['svg.fonttype']='none'`), use Times New Roman globally, enforce bold text for titles/labels/ticks/legend, expose CLI-configurable font sizes, and use the Nature 5-color palette: `#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
+
+## Step 10 — Nature-level interpretability: R-groups + fragments + shape + z_inv attributions
+
+### Objective
+
+Produce manuscript-grade interpretability for the final causal QSAR model:
+
+- series-aware R-group SAR with RDKit RGroupDecomposition
+- fragment and functional-group enrichment
+- docking-free shape analysis (ETKDG conformers + NPR1/NPR2)
+- z_inv-focused attributions (IG preferred, Grad×Input fallback)
+
+### Inputs
+
+Required:
+
+- `--run_dir outputs/runs/<TARGET>/<split>/<run_id>`
+- `--dataset_parquet data/processed/environments/<TARGET>/data/multienv_compound_level.parquet`
+
+Optional:
+
+- `--bbb_parquet data/processed/bbb/<TARGET>/data/bbb_annotations.parquet`
+- `--counterfactuals_parquet outputs/counterfactuals/<TARGET>/<run_id>/candidates/ranked_topk.parquet`
+
+### Outputs
+
+The command writes:
+
+`outputs/interpretability/<TARGET>/<run_id>/` with folders `rgroup/`, `fragments/`, `shape/`, `attribution/`, `figures/`, `figure_data/`, and `provenance/`.
+
+### Run Step 10
+
+```bash
+python scripts/interpret_model.py \
+  --target CHEMBL335 \
+  --run_dir outputs/runs/CHEMBL335/scaffold_bm/<RUN_ID> \
+  --dataset_parquet data/processed/environments/CHEMBL335/data/multienv_compound_level.parquet \
+  --bbb_parquet data/processed/bbb/CHEMBL335/data/bbb_annotations.parquet \
+  --counterfactuals_parquet outputs/counterfactuals/CHEMBL335/<RUN_ID>/candidates/ranked_topk.parquet \
+  --outdir outputs/interpretability/CHEMBL335/<RUN_ID> \
+  --rgroup_series_min_n 8 \
+  --shape_etkdg_confs 10 \
+  --shape_seed 42 \
+  --shape_select lowest_uff_energy \
+  --attribution_method integrated_gradients \
+  --attribution_target z_inv \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Global figure style contract
+
+All Step 10 figures are SVG-only and use editable text (`savefig.format="svg"`, `svg.fonttype="none"`), Times New Roman, bold text for titles/labels/ticks/legends, and the Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`). Numeric data used to draw every figure is also saved under `figure_data/` for reproducibility.
