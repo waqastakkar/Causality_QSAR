@@ -1071,3 +1071,88 @@ python scripts/match_screening_features.py \
 
 - **Tier 1:** map hits to training scaffolds (`exact` or `similarity`) and transfer R-groups using RDKit `RGroupDecomposition`.
 - **Tier 2:** cluster unmapped hits by scaffold or Butina and perform within-chemotype decomposition to summarize novel R-group patterns.
+
+## Step 15 — Build manuscript pack
+
+### Objective
+
+Collect all manuscript artifacts from Steps 1–14 into a reproducible pack with canonical names, manifests, provenance, style contract assets, and an auto-generated checklist.
+
+### Inputs
+
+Required:
+- `--paper_id`
+- `--target`
+- `--run_dir outputs/runs/<TARGET>/<split>/<run_id>/`
+- `--interpret_dir outputs/interpretability/<TARGET>/<run_id>/...`
+- `--robust_dir outputs/robustness/<TARGET>/<robust_id>/...`
+- `--cross_endpoint_dir outputs/evaluation_cross_endpoint/<TARGET>/<eval_id>/...`
+- `--screen_dir outputs/screening/<TARGET>/<screen_id>/...`
+- `--screen_analysis_dir outputs/screening_analysis/<TARGET>/<screen_id>/...`
+- `--screen_match_dir outputs/screening_feature_match/<TARGET>/<screen_id>/...`
+- `--outdir`
+
+Options:
+- `--copy_only true/false`
+- `--svg_only true`
+- `--export_tables_csv true`
+- `--export_tables_xlsx true`
+- `--font`, `--bold_text`, `--palette`
+
+### Outputs
+
+```text
+outputs/manuscript_pack/<paper_id>/
+├─ main_figures/
+├─ supp_figures/
+├─ main_tables/
+├─ supp_tables/
+├─ manifests/
+│  ├─ figure_manifest.csv
+│  ├─ table_manifest.csv
+│  ├─ provenance_manifest.json
+│  ├─ citations_sources.txt
+│  └─ manuscript_checklist.md
+├─ assets/
+│  ├─ nature_palette.json
+│  └─ style_contract.txt
+└─ provenance/
+   ├─ run_config.json
+   ├─ provenance.json
+   └─ environment.txt
+```
+
+`manuscript_checklist.md` includes:
+- Reproducibility Fingerprint (paper_id, target, run_id/paths, git commit, timestamp, key SHA256 hashes).
+- Presence checks for all mapped main/supp figures and tables (✅/❌/⚠️).
+- Missing artifact section.
+- Seeds/splits/ablations section (from run config and robustness indices when available).
+- Figure format checks (`.svg`, non-empty, `<text` element heuristic for editable text).
+
+### Run Step 15
+
+```bash
+python scripts/build_manuscript_pack.py \
+  --paper_id ptp1b_causal_qsar_v1 \
+  --target CHEMBL335 \
+  --run_dir outputs/runs/CHEMBL335/scaffold_bm/<RUN_ID> \
+  --interpret_dir outputs/interpretability/CHEMBL335/<RUN_ID> \
+  --robust_dir outputs/robustness/CHEMBL335/robust_v1 \
+  --cross_endpoint_dir outputs/evaluation_cross_endpoint/CHEMBL335/inhib_ext_v1 \
+  --screen_dir outputs/screening/CHEMBL335/zinc_screen_v1 \
+  --screen_analysis_dir outputs/screening_analysis/CHEMBL335/zinc_screen_v1 \
+  --screen_match_dir outputs/screening_feature_match/CHEMBL335/zinc_screen_v1 \
+  --outdir outputs/manuscript_pack/ptp1b_causal_qsar_v1 \
+  --export_tables_csv true \
+  --export_tables_xlsx true \
+  --copy_only true \
+  --svg_only true \
+  --font "Times New Roman" --bold_text --palette nature5
+```
+
+### Notes on manifests
+
+- `figure_manifest.csv` columns: `fig_id, fig_title, category, source_path, dest_path, step_origin, status, sha256`.
+- `table_manifest.csv` columns: `table_id, table_title, category, source_path, dest_path, step_origin, status, sha256`.
+- Missing mapped artifacts are recorded as `status=missing` (non-fatal).
+- `provenance_manifest.json` records run identifiers, commit hash, tool versions, discovered artifacts, and key input hashes.
