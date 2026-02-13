@@ -1,4 +1,4 @@
-# Human Focus International PTP1B Causal QSAR + Screening Pipeline
+# PTP1B Causal QSAR + Screening Pipeline
 
 **Tagline:** Reproducible, causality-aware QSAR modeling and virtual screening for PTP1B lead discovery.
 
@@ -13,7 +13,7 @@ Compared with many conventional QSAR workflows, this pipeline emphasizes:
 
 ## Table of Contents
 
-- [Human Focus International PTP1B Causal QSAR + Screening Pipeline](#human-focus-international-ptp1b-causal-qsar--screening-pipeline)
+- [PTP1B Causal QSAR + Screening Pipeline](#ptp1b-causal-qsar--screening-pipeline)
   - [Table of Contents](#table-of-contents)
   - [Features](#features)
   - [Prerequisites](#prerequisites)
@@ -326,7 +326,7 @@ Recommended contribution workflow:
 If you use this pipeline in research or screening campaigns, please cite it as:
 
 ```text
-Human Focus International. PTP1B Causal QSAR + Screening Pipeline.
+PTP1B Causal QSAR + Screening Pipeline.
 GitHub repository, versioned release.
 ```
 
