@@ -1013,3 +1013,61 @@ python scripts/analyze_screening.py \
 ### Style contract (mandatory)
 
 All Step 13 figures are SVG-only with editable text (`savefig.format="svg"`, `svg.fonttype="none"`), use Times New Roman, force bold text, and use Nature palette.
+
+## Step 14 — Screening Feature Matching (Shape + Fragments + R-groups + z_inv alignment)
+
+### Objective
+
+Connect screening hits to Step 10 interpretability outputs via shape matching, fragment/functional-group enrichment, z_inv attribution overlap, and two-tier R-group transferability (training scaffold transfer + novel chemotype decomposition).
+
+### Inputs
+
+Required:
+
+- `outputs/screening/<TARGET>/<screen_id>/processed/library_with_props.parquet`
+- `outputs/screening/<TARGET>/<screen_id>/ranking/ranked_all.parquet` (or `ranked_cns_like_in_domain.parquet` if present)
+- `data/processed/environments/<TARGET>/data/multienv_compound_level.parquet`
+- `outputs/interpretability/<TARGET>/<run_id>/shape/shape_descriptors.parquet`
+- `outputs/interpretability/<TARGET>/<run_id>/attribution/fragment_attributions.csv`
+- `outputs/interpretability/<TARGET>/<run_id>/rgroup/series_scaffolds.csv`
+
+Recommended:
+
+- `outputs/screening_analysis/<TARGET>/<screen_id>/selections/top100_diverse.csv`
+
+### Outputs
+
+`outputs/screening_feature_match/<TARGET>/<screen_id>/`:
+
+- `matched/` (`hits_topk.parquet`, `hits_with_shape.parquet`, `hits_with_fragments.parquet`, `hits_scaffold_mapping.parquet`, `hits_rgroup_transfer.parquet`, `hits_chemotype_clusters.parquet`)
+- `reports/` (`shape_shift_report.csv`, `fragment_enrichment_hits_vs_library.csv`, `functional_group_enrichment_hits_vs_library.csv`, `fragment_overlap_with_zinv.csv`, `scaffold_mapping_report.csv`, `rgroup_transferability_report.csv`, `chemotype_summary.csv`, `top_hits_feature_cards.csv`)
+- `selections/` (`top50_hits_with_features.csv`, `top100_hits_with_features.csv`, `chemotype_leads.csv`, `chemotype_panels.csv`)
+- `figures/` (all SVG)
+- `figure_data/` (CSV for each figure)
+- `provenance/` (`run_config.json`, `provenance.json`, `environment.txt`)
+
+### Run Step 14
+
+```bash
+python scripts/match_screening_features.py \
+  --target CHEMBL335 \
+  --screen_dir outputs/screening/CHEMBL335/zinc_screen_v1 \
+  --screen_analysis_dir outputs/screening_analysis/CHEMBL335/zinc_screen_v1 \
+  --train_parquet data/processed/environments/CHEMBL335/data/multienv_compound_level.parquet \
+  --interpret_dir outputs/interpretability/CHEMBL335/<RUN_ID> \
+  --outdir outputs/screening_feature_match/CHEMBL335/zinc_screen_v1 \
+  --hits_source top100_diverse \
+  --hits_topk 100 \
+  --shape_etkdg_confs 10 --shape_seed 42 --shape_select lowest_uff_energy \
+  --fragment_method brics \
+  --rgroup_transfer true \
+  --scaffold_match exact \
+  --chemotype_cluster_method scaffold \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Two-tier R-group handling note
+
+- **Tier 1:** map hits to training scaffolds (`exact` or `similarity`) and transfer R-groups using RDKit `RGroupDecomposition`.
+- **Tier 2:** cluster unmapped hits by scaffold or Butina and perform within-chemotype decomposition to summarize novel R-group patterns.

@@ -35,6 +35,13 @@ def add_plot_style_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--font_legend", type=int, default=12)
 
 
+def parse_palette(palette: str) -> list[str]:
+    if palette == "nature5":
+        return NATURE5
+    parsed = [c.strip() for c in palette.split(",") if c.strip()]
+    return parsed if parsed else NATURE5
+
+
 def style_from_args(args: argparse.Namespace) -> PlotStyle:
     return PlotStyle(
         font_family=args.font,
@@ -47,7 +54,7 @@ def style_from_args(args: argparse.Namespace) -> PlotStyle:
     )
 
 
-def configure_matplotlib(style: PlotStyle, svg: bool = True) -> None:
+def set_manuscript_style(style: PlotStyle, svg: bool = True) -> None:
     if mpl is None:
         raise RuntimeError("matplotlib is required for plotting")
     mpl.rcParams["savefig.format"] = "svg" if svg else mpl.rcParams.get("savefig.format", "png")
@@ -63,8 +70,10 @@ def configure_matplotlib(style: PlotStyle, svg: bool = True) -> None:
     mpl.rcParams["xtick.labelsize"] = style.font_tick
     mpl.rcParams["ytick.labelsize"] = style.font_tick
     mpl.rcParams["legend.fontsize"] = style.font_legend
-    mpl.rcParams["axes.titleweight"] = "bold" if style.bold_text else "normal"
-    mpl.rcParams["xtick.major.width"] = 1.0
+
+
+def configure_matplotlib(style: PlotStyle, svg: bool = True) -> None:
+    set_manuscript_style(style, svg=svg)
 
 
 def style_axis(ax, style: PlotStyle, title: str | None = None, xlabel: str | None = None, ylabel: str | None = None) -> None:
@@ -83,13 +92,3 @@ def style_axis(ax, style: PlotStyle, title: str | None = None, xlabel: str | Non
         for text in legend.get_texts():
             text.set_fontsize(style.font_legend)
             text.set_fontweight(w)
-        if legend.get_title() is not None:
-            legend.get_title().set_fontsize(style.font_legend)
-            legend.get_title().set_fontweight(w)
-
-
-def parse_palette(palette: str) -> list[str]:
-    if palette == "nature5":
-        return NATURE5
-    parsed = [c.strip() for c in palette.split(",") if c.strip()]
-    return parsed if parsed else NATURE5
