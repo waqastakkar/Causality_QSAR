@@ -631,3 +631,40 @@ python scripts/finetune_with_counterfactuals.py \
 ```
 
 Step 7 figure contract: SVG only (`savefig.format=svg`, `svg.fonttype=none`), Times New Roman, all text bold (titles/labels/ticks/legend), configurable font sizes, and the fixed Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
+
+## Step 8 — Evaluation suite (performance + OOD generalization + causal sanity checks)
+
+### 8.1 Evaluate one target across multiple runs
+
+```bash
+mkdir -p outputs/evaluation
+
+python scripts/evaluate_runs.py \
+  --target CHEMBLXXXX \
+  --runs_root outputs/runs/CHEMBLXXXX \
+  --splits_dir data/processed/splits/CHEMBLXXXX/splits \
+  --dataset_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --bbb_parquet data/processed/bbb/CHEMBLXXXX/data/bbb_annotations.parquet \
+  --counterfactuals_root outputs/counterfactuals/CHEMBLXXXX \
+  --outdir outputs/evaluation/CHEMBLXXXX/eval_v1 \
+  --task regression --label_col pIC50 \
+  --env_col env_id_manual \
+  --compute_envprobe \
+  --compute_zinv_stability \
+  --compute_cf_consistency \
+  --bootstrap 1000 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### 8.2 Optional paper figure pack export
+
+```bash
+python scripts/make_paper_figures.py \
+  --eval_dir outputs/evaluation/CHEMBLXXXX/eval_v1 \
+  --outdir outputs/evaluation/CHEMBLXXXX/eval_v1/figures \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+All Step 7/8 figures are SVG-only with editable text (`svg.fonttype=none`), Times New Roman, bold typography, and the Nature 5-color palette through `scripts/plot_style.py`.
