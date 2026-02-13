@@ -893,3 +893,73 @@ python scripts/evaluate_robustness.py \
 
 All Step 11 figures are SVG-only with editable text (`savefig.format="svg"`, `svg.fonttype="none"`), use Times New Roman, force bold text for titles/labels/ticks/legend, expose CLI font sizes (`--font_title`, `--font_label`, `--font_tick`, `--font_legend`), and use the Nature palette:
 `#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
+
+## Step 12 — Screening database ingestion + feature parity + scoring + ranking
+
+### Objective
+
+Ingest vendor/library files (`.smi`/`.csv`), parse + clean with full auditability, compute properties and BBB/CNS metrics, featurize with strict training parity (`artifacts/feature_schema.json`), run single-model or ensemble inference, apply applicability domain filtering, and export ranked hitlists with SVG manuscript figures plus paired `figure_data` CSVs.
+
+### Inputs
+
+Required:
+- `--run_dir outputs/runs/<TARGET>/<split>/<run_id>`
+- `--input_path <library.smi|library.csv>`
+- `--input_format {smi,csv}`
+
+Optional:
+- `--use_ensemble_manifest outputs/robustness/<TARGET>/<robust_id>/manifests/ensemble_manifest.json`
+- CSV mapping: `--sep`, `--header`, `--smiles_col`, `--id_col`, `--name_col`
+- SMI mapping: `--smi_layout {smiles_id,smiles_name_id,smiles_only}`
+- BBB/AD/ranking: `--compute_bbb`, `--cns_mpo_threshold`, `--compute_ad`, `--ad_mode`, `--ad_threshold`, `--topk`
+- Plot style controls: `--svg --font "Times New Roman" --bold_text --palette nature5 --font_title --font_label --font_tick --font_legend`
+
+### Outputs
+
+`outputs/screening/<TARGET>/<screen_id>/` with:
+- `input/library_manifest.csv`, `input/input_fingerprint.json`
+- `processed/library_raw_parsed.parquet`, `library_clean.parquet`, `library_dedup.parquet`, `library_with_props.parquet`, `featurization_report.csv`
+- `predictions/scored_single_model.parquet`, `scored_ensemble.parquet`, `scored_with_uncertainty.parquet`
+- `ranking/ranked_all.parquet`, `ranked_cns_like.parquet`, `ranked_in_domain.parquet`, `ranked_cns_like_in_domain.parquet`, `top_100.csv`, `top_500.csv`, `selection_report.csv`
+- `figures/fig_score_distribution.svg`, `fig_uncertainty_distribution.svg`, `fig_pareto_score_vs_cns.svg`, `fig_score_vs_ad.svg`, `fig_topk_property_summary.svg`
+- `figure_data/score_distribution.csv`, `uncertainty_distribution.csv`, `pareto_score_vs_cns.csv`, `score_vs_ad.csv`, `topk_property_summary.csv`
+- `provenance/run_config.json`, `provenance.json`, `environment.txt`
+
+### Run Step 12
+
+SMI example:
+
+```bash
+python scripts/screen_library.py \
+  --target CHEMBL335 \
+  --run_dir outputs/runs/CHEMBL335/scaffold_bm/<RUN_ID> \
+  --input_path data/screening/raw/library.smi \
+  --input_format smi --smi_layout smiles_id \
+  --outdir outputs/screening \
+  --use_ensemble_manifest outputs/robustness/CHEMBL335/robust_v1/manifests/ensemble_manifest.json \
+  --compute_bbb true --cns_mpo_threshold 4.0 \
+  --compute_ad true --ad_mode fingerprint --ad_threshold 0.35 \
+  --topk 500 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+CSV example:
+
+```bash
+python scripts/screen_library.py \
+  --target CHEMBL335 \
+  --run_dir outputs/runs/CHEMBL335/scaffold_bm/<RUN_ID> \
+  --input_path data/screening/raw/library.csv \
+  --input_format csv --sep "," --header true \
+  --smiles_col SMILES --id_col CompoundID --name_col Name \
+  --outdir outputs/screening \
+  --compute_bbb true --compute_ad true --ad_mode fingerprint --ad_threshold 0.35 \
+  --topk 500 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Style contract (mandatory)
+
+Step 12 figures are SVG-only with editable text (`savefig.format="svg"`, `svg.fonttype="none"`), use Times New Roman, and force bold titles/labels/ticks/legend with Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
