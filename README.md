@@ -340,5 +340,5 @@ If your project policy differs, replace this section with the repository’s can
 
 ## Contact
 
-- Email: `research@humanfocus.international`
-- GitHub: `@human-focus-international`
+- Email: `waqastakkar@gmail.com`
+- GitHub: `@waqastakkar`
