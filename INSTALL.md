@@ -817,3 +817,79 @@ python scripts/interpret_model.py \
 ### Global figure style contract
 
 All Step 10 figures are SVG-only and use editable text (`savefig.format="svg"`, `svg.fonttype="none"`), Times New Roman, bold text for titles/labels/ticks/legends, and the Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`). Numeric data used to draw every figure is also saved under `figure_data/` for reproducibility.
+
+## Step 11 — Robustness & Uncertainty Suite
+
+### Objective
+
+Given multi-run training outputs from Steps 5/6, generate:
+- deep-ensemble mean prediction and uncertainty (`yhat_mean`, `yhat_std`)
+- split conformal prediction intervals (validation-calibrated)
+- applicability domain (fingerprint + embedding)
+- multi-seed stability summaries and statistical tests
+- manuscript-ready SVG figures + paired numeric `figure_data` CSVs
+
+### Inputs
+
+Required:
+- `--runs_root outputs/runs/<TARGET>`
+- `--dataset_parquet data/processed/environments/<TARGET>/data/multienv_compound_level.parquet`
+
+Optional:
+- `--bbb_parquet data/processed/bbb/<TARGET>/data/bbb_annotations.parquet`
+- `--external_scored_parquet outputs/evaluation_cross_endpoint/<TARGET>/<eval_id>/predictions/external_scored.parquet`
+
+Each run is discovered recursively and considered valid if it contains:
+- `checkpoints/best.pt`
+- `predictions/test_predictions.parquet`
+
+### Outputs
+
+`outputs/robustness/<TARGET>/<robust_id>/` with exactly:
+- `manifests/` (`runs_index.csv`, `groups_index.csv`, `ensemble_manifest.json`)
+- `ensemble/` (`ensemble_predictions_{train,val,test}.parquet`, `ensemble_uncertainty.csv`, `selective_prediction.csv`)
+- `conformal/` (`conformal_calibration.csv`, `conformal_intervals_test.parquet`, `conformal_coverage.csv`, `interval_width_by_split.csv`)
+- `applicability_domain/` (`ad_fingerprint.parquet`, `ad_embedding.parquet`, `error_vs_ad.csv`, `uncertainty_vs_ad.csv`)
+- `stability/` (`seed_stability_metrics.csv`, `ablation_stability_table.csv`, `statistical_tests.csv`)
+- `figures/` (all required SVGs)
+- `figure_data/` (one CSV per figure)
+- `provenance/` (`run_config.json`, `provenance.json`, `environment.txt`)
+
+### Run Step 11
+
+```bash
+python scripts/evaluate_robustness.py \
+  --target CHEMBL335 \
+  --runs_root outputs/runs/CHEMBL335 \
+  --dataset_parquet data/processed/environments/CHEMBL335/data/multienv_compound_level.parquet \
+  --bbb_parquet data/processed/bbb/CHEMBL335/data/bbb_annotations.parquet \
+  --outdir outputs/robustness/CHEMBL335/robust_v1 \
+  --task regression --label_col pIC50 \
+  --group_by split_name ablation \
+  --ensemble_size 5 \
+  --conformal_coverage 0.90 \
+  --ad_fingerprint morgan --ad_radius 2 --ad_nbits 2048 \
+  --ad_embedding z_inv --ad_k 1 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+Optional external conformal check:
+
+```bash
+python scripts/evaluate_robustness.py \
+  --target CHEMBL335 \
+  --runs_root outputs/runs/CHEMBL335 \
+  --dataset_parquet data/processed/environments/CHEMBL335/data/multienv_compound_level.parquet \
+  --external_scored_parquet outputs/evaluation_cross_endpoint/CHEMBL335/inhib_ext_v1/predictions/external_scored.parquet \
+  --outdir outputs/robustness/CHEMBL335/robust_v1 \
+  --task regression --label_col pIC50 \
+  --conformal_coverage 0.90 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Global figure style contract
+
+All Step 11 figures are SVG-only with editable text (`savefig.format="svg"`, `svg.fonttype="none"`), use Times New Roman, force bold text for titles/labels/ticks/legend, expose CLI font sizes (`--font_title`, `--font_label`, `--font_tick`, `--font_legend`), and use the Nature palette:
+`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
