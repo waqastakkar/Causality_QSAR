@@ -406,3 +406,71 @@ python scripts/bbb_stratify.py \
 ```
 
 All Step 4 and Step 4.4 figures are SVG-only with editable text (`svg.fonttype=none`), Times New Roman, bold titles/labels/ticks/legend, configurable font sizes, and the fixed Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
+
+## Step 5 — Causal QSAR core (encoder + invariance + benchmark)
+
+### Objectives
+
+- Train a causal QSAR GNN where predictions are made from invariant representation `z_inv` only.
+- Enforce environment invariance using GRL adversary (`env_id_manual` from Step 3), optional IRM, and disentanglement (`z_inv ⟂ z_spu`).
+- Produce production-grade artifacts (checkpoints, predictions, reports, figures, provenance) with strict reproducibility.
+
+### Required inputs
+
+- Dataset parquet: `data/processed/environments/<TARGET>/data/multienv_compound_level.parquet`
+- Splits manifest: `data/processed/splits/<TARGET>/splits/<split_name>/{train_ids.csv,val_ids.csv,test_ids.csv}`
+- Optional BBB annotations: `data/processed/bbb/<TARGET>/data/bbb_annotations.parquet`
+
+### Output structure
+
+```text
+outputs/runs/<TARGET>/<split_name>/<run_id>/
+  checkpoints/{best.pt,last.pt}
+  configs/{train_config.yaml,resolved_config.yaml}
+  logs/{train.log,metrics.jsonl}
+  predictions/{train_predictions.parquet,val_predictions.parquet,test_predictions.parquet}
+  reports/{metrics_summary.csv,per_env_metrics.csv,invariance_checks.csv,calibration.csv,bbb_metrics.csv,ablation_table.csv}
+  figures/*.svg
+  provenance/{provenance.json,run_config.json,environment.txt}
+```
+
+### Train command example
+
+```bash
+python scripts/train_causal_qsar.py \
+  --target CHEMBLXXXX \
+  --dataset_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --splits_dir data/processed/splits/CHEMBLXXXX/splits \
+  --split_name split_01 \
+  --outdir outputs/runs \
+  --task regression \
+  --label_col pIC50 \
+  --env_col env_id_manual \
+  --encoder gine \
+  --z_dim 128 --z_inv_dim 64 --z_spu_dim 64 \
+  --lambda_adv 0.5 --lambda_irm 0.1 --lambda_dis 0.1 \
+  --epochs 30 --batch_size 64 --lr 1e-3 --seed 42 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### Benchmark command example
+
+```bash
+python scripts/run_benchmark.py \
+  --target CHEMBLXXXX \
+  --dataset_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --splits_dir data/processed/splits/CHEMBLXXXX/splits \
+  --split_names split_01,split_02,split_03 \
+  --outdir outputs/runs \
+  --task regression \
+  --label_col pIC50 \
+  --env_col env_id_manual \
+  --seeds 42,43 \
+  --ablations full,no_adv,no_irm,no_dis \
+  --epochs 30 --batch_size 64 --lr 1e-3 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+All Step 5 figures are SVG only with editable text (`svg.fonttype=none`), Times New Roman, bold titles/labels/ticks/legend, configurable font sizes, and the fixed Nature 5-color palette: `#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
