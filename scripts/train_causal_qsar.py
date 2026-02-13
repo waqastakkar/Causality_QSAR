@@ -17,13 +17,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn.functional as F
 import yaml
 from sklearn.metrics import accuracy_score
-from torch import nn
 from torch_geometric.loader import DataLoader
 
 from data_graph import GraphBuildConfig, dataframe_to_graphs, ensure_required_columns, read_split_ids, remap_env_ids, split_dataframe_by_ids
+from losses import adversary_env_loss, compute_env_class_weights, disentanglement_loss, irmv1_penalty, prediction_loss
 from metrics import (
     classification_metrics,
     expected_calibration_error,
@@ -53,11 +52,19 @@ class TrainConfig:
     lambda_adv: float
     lambda_irm: float
     lambda_dis: float
+    loss_pred: str
+    loss_cls: str
+    loss_env: str
+    irm_mode: str
+    disentangle: str
+    warmup_epochs: int
+    ramp_epochs: int
     epochs: int
     batch_size: int
     lr: float
     seed: int
     bbb_parquet: str | None
+    sample_weight_col: str | None
     svg: bool
     font: str
     bold_text: bool
@@ -94,24 +101,12 @@ def git_commit() -> str | None:
         return None
 
 
-def irm_penalty(yhat: torch.Tensor, y: torch.Tensor, env: torch.Tensor) -> torch.Tensor:
-    penalty = torch.tensor(0.0, device=yhat.device)
-    scale = torch.tensor(1.0, device=yhat.device, requires_grad=True)
-    for e in env.unique():
-        m = env == e
-        if m.sum() < 2:
-            continue
-        l = F.mse_loss(yhat[m] * scale, y[m])
-        grad = torch.autograd.grad(l, [scale], create_graph=True)[0]
-        penalty = penalty + grad.pow(2)
-    return penalty
-
-
-def disentangle_penalty(z_inv: torch.Tensor, z_spu: torch.Tensor) -> torch.Tensor:
-    zi = z_inv - z_inv.mean(0, keepdim=True)
-    zs = z_spu - z_spu.mean(0, keepdim=True)
-    c = (zi.T @ zs) / max(1, zi.shape[0] - 1)
-    return c.pow(2).mean()
+def schedule_weight(epoch: int, warmup_epochs: int, ramp_epochs: int) -> float:
+    if epoch <= warmup_epochs:
+        return 0.0
+    if ramp_epochs <= 0:
+        return 1.0
+    return float(min(1.0, (epoch - warmup_epochs) / float(ramp_epochs)))
 
 
 def evaluate(model, loader, device, task, lambda_grl=1.0):
@@ -143,15 +138,7 @@ def evaluate(model, loader, device, task, lambda_grl=1.0):
 
 
 def make_dirs(root: Path):
-    for sub in [
-        "checkpoints",
-        "configs",
-        "logs",
-        "predictions",
-        "reports",
-        "figures",
-        "provenance",
-    ]:
+    for sub in ["checkpoints", "configs", "logs", "predictions", "reports", "figures", "provenance"]:
         (root / sub).mkdir(parents=True, exist_ok=True)
 
 
@@ -172,14 +159,22 @@ def parse_args():
     p.add_argument("--lambda_adv", type=float, default=0.5)
     p.add_argument("--lambda_irm", type=float, default=0.0)
     p.add_argument("--lambda_dis", type=float, default=0.1)
+    p.add_argument("--loss_pred", choices=["mse", "huber"], default="huber")
+    p.add_argument("--loss_cls", choices=["bce", "focal"], default="bce")
+    p.add_argument("--loss_env", choices=["ce", "weighted_ce"], default="ce")
+    p.add_argument("--irm_mode", choices=["none", "irmv1"], default="none")
+    p.add_argument("--disentangle", choices=["none", "orthogonality", "hsic"], default="orthogonality")
+    p.add_argument("--warmup_epochs", type=int, default=0)
+    p.add_argument("--ramp_epochs", type=int, default=0)
     p.add_argument("--epochs", type=int, default=20)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--bbb_parquet", default=None)
+    p.add_argument("--sample_weight_col", default=None)
     p.add_argument("--svg", action="store_true")
     p.add_argument("--font", default="Times New Roman")
-    p.add_argument("--bold_text", action="store_true")
+    p.add_argument("--bold_text", action="store_true", default=True)
     p.add_argument("--palette", default="nature5")
     p.add_argument("--font_title", type=int, default=16)
     p.add_argument("--font_label", type=int, default=14)
@@ -205,10 +200,10 @@ def main():
         font_label=cfg.font_label,
         font_tick=cfg.font_tick,
         font_legend=cfg.font_legend,
-        bold_text=cfg.bold_text,
+        bold_text=True,
         palette=parse_palette(cfg.palette),
     )
-    configure_matplotlib(style, svg=cfg.svg)
+    configure_matplotlib(style, svg=True)
 
     with (run_root / "configs/train_config.yaml").open("w") as f:
         yaml.safe_dump(vars(args), f)
@@ -217,11 +212,13 @@ def main():
 
     df = pd.read_parquet(cfg.dataset_parquet)
     ensure_required_columns(df, ["molecule_id", "smiles", cfg.label_col, cfg.env_col])
+    if cfg.sample_weight_col and cfg.sample_weight_col not in df.columns:
+        raise ValueError(f"sample_weight_col='{cfg.sample_weight_col}' not in dataset")
     df, env_map = remap_env_ids(df, cfg.env_col)
     split_ids = read_split_ids(cfg.splits_dir, cfg.split_name)
     split_df = split_dataframe_by_ids(df, split_ids)
 
-    gcfg = GraphBuildConfig(label_col=cfg.label_col, env_col=cfg.env_col)
+    gcfg = GraphBuildConfig(label_col=cfg.label_col, env_col=cfg.env_col, sample_weight_col=cfg.sample_weight_col)
     train_graphs = dataframe_to_graphs(split_df["train"], gcfg)
     val_graphs = dataframe_to_graphs(split_df["val"], gcfg)
     test_graphs = dataframe_to_graphs(split_df["test"], gcfg)
@@ -229,6 +226,14 @@ def main():
     train_loader = DataLoader(train_graphs, batch_size=cfg.batch_size, shuffle=True)
     val_loader = DataLoader(val_graphs, batch_size=cfg.batch_size, shuffle=False)
     test_loader = DataLoader(test_graphs, batch_size=cfg.batch_size, shuffle=False)
+
+    train_env = torch.tensor([int(g.env.item()) for g in train_graphs], dtype=torch.long)
+    env_class_weights = compute_env_class_weights(train_env, len(env_map))
+    env_counts = torch.bincount(train_env, minlength=len(env_map)).tolist()
+    env_balance = pd.DataFrame(
+        {"env_id": list(range(len(env_map))), "count": env_counts, "weight": env_class_weights.tolist()}
+    )
+    env_balance.to_csv(run_root / "reports/env_balance.csv", index=False)
 
     node_dim = train_graphs[0].x.shape[1]
     edge_dim = train_graphs[0].edge_attr.shape[1]
@@ -245,27 +250,64 @@ def main():
         encoder=cfg.encoder,
     ).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
-    pred_loss_fn = nn.HuberLoss() if cfg.task == "regression" else nn.BCEWithLogitsLoss()
 
     best_val = float("inf")
     history = []
+    schedule_rows = []
+    irm_diag_rows = []
+    dis_diag_rows = []
     jsonl = (run_root / "logs/metrics.jsonl").open("w")
 
+    env_class_weights = env_class_weights.to(device)
     for epoch in range(1, cfg.epochs + 1):
+        ramp = schedule_weight(epoch, cfg.warmup_epochs, cfg.ramp_epochs)
+        lam_adv = cfg.lambda_adv * ramp
+        lam_irm = cfg.lambda_irm * ramp
+        lam_dis = cfg.lambda_dis * ramp
+        schedule_rows.append({"epoch": epoch, "lambda_adv": lam_adv, "lambda_irm": lam_irm, "lambda_dis": lam_dis})
+
         model.train()
         losses = {"pred": 0.0, "adv": 0.0, "irm": 0.0, "dis": 0.0, "total": 0.0}
+        metric_state = {"cosine": 0.0, "hsic": 0.0}
         n = 0
+
         for batch in train_loader:
             batch = batch.to(device)
-            out = model(batch, lambda_grl=1.0)
+            out = model(batch, lambda_grl=lam_adv)
             y = batch.y.float()
             yhat = out["yhat"]
-            l_pred = pred_loss_fn(yhat, y)
-            l_adv = F.cross_entropy(out["envhat"], batch.env)
-            l_irm = irm_penalty(yhat, y, batch.env) if cfg.lambda_irm > 0 else torch.tensor(0.0, device=device)
-            l_dis = disentangle_penalty(out["z_inv"], out["z_spu"])
-            loss = l_pred + cfg.lambda_adv * l_adv + cfg.lambda_irm * l_irm + cfg.lambda_dis * l_dis
+            sample_weight = batch.sample_weight.float() if hasattr(batch, "sample_weight") else None
 
+            l_pred = prediction_loss(
+                yhat,
+                y,
+                task=cfg.task,
+                loss_pred=cfg.loss_pred,
+                loss_cls=cfg.loss_cls,
+                sample_weight=sample_weight,
+            )
+            l_adv = adversary_env_loss(out["envhat"], batch.env, loss_env=cfg.loss_env, env_class_weights=env_class_weights)
+
+            if cfg.irm_mode == "irmv1" and lam_irm > 0:
+                l_irm, irm_diags = irmv1_penalty(
+                    yhat,
+                    y,
+                    batch.env,
+                    task=cfg.task,
+                    loss_pred=cfg.loss_pred,
+                    loss_cls=cfg.loss_cls,
+                    sample_weight=sample_weight,
+                )
+                for d in irm_diags:
+                    irm_diag_rows.append({"epoch": epoch, "env_id": d.env_id, "risk_env": d.risk_env, "grad_norm_sq": d.grad_norm_sq})
+            else:
+                l_irm = torch.zeros((), device=device)
+
+            l_dis, dis_metrics = disentanglement_loss(out["z_inv"], out["z_spu"], mode=cfg.disentangle)
+            if cfg.disentangle != "none":
+                dis_diag_rows.append({"epoch": epoch, "cosine_sim": dis_metrics["cosine_sim"], "hsic": dis_metrics["hsic"]})
+
+            loss = l_pred + lam_adv * l_adv + lam_irm * l_irm + lam_dis * l_dis
             opt.zero_grad()
             loss.backward()
             opt.step()
@@ -277,6 +319,8 @@ def main():
             losses["irm"] += float(l_irm.item()) * bs
             losses["dis"] += l_dis.item() * bs
             losses["total"] += loss.item() * bs
+            metric_state["cosine"] += dis_metrics["cosine_sim"] * bs
+            metric_state["hsic"] += dis_metrics["hsic"] * bs
 
         train_pred_df, _ = evaluate(model, train_loader, device, cfg.task)
         val_pred_df, _ = evaluate(model, val_loader, device, cfg.task)
@@ -289,7 +333,13 @@ def main():
 
         row = {
             "epoch": epoch,
-            **{f"loss_{k}": losses[k] / max(1, n) for k in losses},
+            "L_pred": losses["pred"] / max(1, n),
+            "L_env": losses["adv"] / max(1, n),
+            "L_irm": losses["irm"] / max(1, n),
+            "L_dis": losses["dis"] / max(1, n),
+            "total": losses["total"] / max(1, n),
+            "cosine_sim": metric_state["cosine"] / max(1, n),
+            "hsic": metric_state["hsic"] / max(1, n),
             **{f"val_{k}": v for k, v in vmetric.items()},
         }
         history.append(row)
@@ -303,6 +353,16 @@ def main():
 
     jsonl.close()
     model.load_state_dict(torch.load(run_root / "checkpoints/best.pt", map_location=device))
+
+    hist = pd.DataFrame(history)
+    hist[["epoch", "L_pred", "L_env", "L_irm", "L_dis", "total"]].to_csv(
+        run_root / "reports/loss_breakdown.csv", index=False
+    )
+    pd.DataFrame(schedule_rows).to_csv(run_root / "reports/schedule.csv", index=False)
+    if cfg.irm_mode == "irmv1":
+        pd.DataFrame(irm_diag_rows, columns=["epoch", "env_id", "risk_env", "grad_norm_sq"]).to_csv(run_root / "reports/irm_diagnostics.csv", index=False)
+    if cfg.disentangle != "none":
+        pd.DataFrame(dis_diag_rows, columns=["epoch", "cosine_sim", "hsic"]).to_csv(run_root / "reports/disentanglement_diagnostics.csv", index=False)
 
     pred_dfs = {}
     z_splits = {}
@@ -340,7 +400,7 @@ def main():
     inv.to_csv(run_root / "reports/invariance_checks.csv", index=False)
 
     if cfg.task == "classification":
-        ece, cal_df = expected_calibration_error(test_df["y_true"], test_df["y_pred"]) 
+        ece, cal_df = expected_calibration_error(test_df["y_true"], test_df["y_pred"])
         cal_df["ece"] = ece
     else:
         cal_df = regression_calibration(test_df["y_true"], test_df["y_pred"])
@@ -371,77 +431,47 @@ def main():
                 "lambda_adv": cfg.lambda_adv,
                 "lambda_irm": cfg.lambda_irm,
                 "lambda_dis": cfg.lambda_dis,
+                "loss_pred": cfg.loss_pred,
+                "loss_cls": cfg.loss_cls,
+                "loss_env": cfg.loss_env,
+                "irm_mode": cfg.irm_mode,
+                "disentangle": cfg.disentangle,
                 **ms,
             }
         ]
     )
     ablation.to_csv(run_root / "reports/ablation_table.csv", index=False)
 
-    hist = pd.DataFrame(history)
+    # Step 6 figures
     fig, ax = plt.subplots(figsize=(8, 5))
-    for c in ["loss_pred", "loss_adv", "loss_irm", "loss_dis", "loss_total"]:
-        if c in hist:
-            ax.plot(hist["epoch"], hist[c], label=c)
-    style_axis(ax, style, "Learning Curves", "Epoch", "Loss")
+    for c in ["L_pred", "L_env", "L_irm", "L_dis", "total"]:
+        ax.plot(hist["epoch"], hist[c], label=c)
     ax.legend()
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_learning_curves.svg")
+    style_axis(ax, style, "Loss Components Over Time", "Epoch", "Loss")
+    fig.tight_layout()
+    fig.savefig(run_root / "figures/fig_loss_components_over_time.svg")
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    vals = []
-    for split in ["train", "val", "test"]:
-        if cfg.task == "regression":
-            vals.append(regression_metrics(pred_dfs[split].y_true, pred_dfs[split].y_pred)["rmse"])
-        else:
-            vals.append(classification_metrics(pred_dfs[split].y_true, pred_dfs[split].y_pred)["auc"])
-    ax.bar(["train", "val", "test"], vals)
-    style_axis(ax, style, "Performance by Split", "Split", "RMSE" if cfg.task == "regression" else "AUC")
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_perf_by_split.svg")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    irm_curve = hist["L_irm"] if "L_irm" in hist.columns else np.zeros(len(hist))
+    ax.plot(hist["epoch"], irm_curve, label="L_irm")
+    ax.legend()
+    style_axis(ax, style, "IRM Penalty Over Time", "Epoch", "IRM Penalty")
+    fig.tight_layout()
+    fig.savefig(run_root / "figures/fig_irm_penalty_over_time.svg")
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    metric_col = "rmse" if cfg.task == "regression" else "auc"
-    if metric_col in per_env.columns:
-        ax.bar(per_env["env_id_manual"].astype(str), per_env[metric_col])
-    style_axis(ax, style, "Performance by Environment", "env_id_manual", metric_col)
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_perf_by_env.svg")
-
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.bar(["adversary_acc"], [env_adv_acc])
-    style_axis(ax, style, "Environment Adversary Accuracy", "", "Accuracy")
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_env_adversary_accuracy.svg")
-
-    fig, ax = plt.subplots(figsize=(5, 4))
-    ax.bar(["linear_probe"], [z_probe])
-    style_axis(ax, style, "z_inv Environment Predictability", "", "Accuracy")
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_zinv_env_predictability.svg")
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    if cfg.task == "classification" and not cal_df.empty and {"confidence", "accuracy"}.issubset(cal_df.columns):
-        ax.plot(cal_df["confidence"], cal_df["accuracy"], marker="o", label="observed")
-        ax.plot([0, 1], [0, 1], "--", label="ideal")
-        ax.legend()
-        style_axis(ax, style, "Calibration", "Confidence", "Accuracy")
-    else:
-        if not cal_df.empty and {"pred_mean", "obs_mean"}.issubset(cal_df.columns):
-            ax.plot(cal_df["pred_mean"], cal_df["obs_mean"], marker="o")
-            lo, hi = cal_df[["pred_mean", "obs_mean"]].min().min(), cal_df[["pred_mean", "obs_mean"]].max().max()
-            ax.plot([lo, hi], [lo, hi], "--")
-        style_axis(ax, style, "Calibration", "Predicted", "Observed")
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_calibration.svg")
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.plot(hist["epoch"], hist["cosine_sim"], label="avg |cos(z_inv, z_spu)|")
+    ax.plot(hist["epoch"], hist["hsic"], label="hsic")
+    ax.legend()
+    style_axis(ax, style, "Disentanglement Diagnostics", "Epoch", "Metric")
+    fig.tight_layout()
+    fig.savefig(run_root / "figures/fig_disentanglement_over_time.svg")
 
     fig, ax = plt.subplots(figsize=(7, 4))
-    if not bbb_metrics.empty and ("rmse" in bbb_metrics.columns or "auc" in bbb_metrics.columns):
-        mcol = "rmse" if "rmse" in bbb_metrics.columns else "auc"
-        ax.bar(bbb_metrics["value"].astype(str), bbb_metrics[mcol])
-    style_axis(ax, style, "BBB Stratified Performance", "Stratum", "Metric")
-    fig.tight_layout(); fig.savefig(run_root / "figures/fig_bbb_stratified_perf.svg")
-
-    if cfg.bbb_parquet and not bbb_metrics.empty and "cns_mpo_bin" in bbb_metrics["stratum"].astype(str).tolist():
-        fig, ax = plt.subplots(figsize=(6, 4))
-        mpo = bbb_metrics[bbb_metrics["stratum"] == "cns_mpo_bin"]
-        ycol = "rmse" if "rmse" in mpo.columns else "auc"
-        ax.scatter(mpo["value"].astype(str), mpo[ycol])
-        style_axis(ax, style, "Pareto: potency vs CNS", "CNS MPO bin", ycol)
-        fig.tight_layout(); fig.savefig(run_root / "figures/fig_pareto_potency_vs_cns.svg")
+    ax.bar(env_balance["env_id"].astype(str), env_balance["weight"])
+    style_axis(ax, style, "Environment Weights Distribution", "Environment", "Weight")
+    fig.tight_layout()
+    fig.savefig(run_root / "figures/fig_env_weights_distribution.svg")
 
     scripts = [
         "scripts/train_causal_qsar.py",
@@ -449,6 +479,7 @@ def main():
         "scripts/data_graph.py",
         "scripts/metrics.py",
         "scripts/plot_style.py",
+        "scripts/losses.py",
     ]
     prov = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -467,7 +498,19 @@ def main():
         "seed": cfg.seed,
         "split_name": cfg.split_name,
         "model_hyperparams": {"encoder": cfg.encoder, "z_dim": cfg.z_dim, "z_inv_dim": cfg.z_inv_dim, "z_spu_dim": cfg.z_spu_dim},
-        "loss_weights": {"lambda_adv": cfg.lambda_adv, "lambda_irm": cfg.lambda_irm, "lambda_dis": cfg.lambda_dis},
+        "loss_objective": {
+            "L": "L_pred + lambda_adv * L_env + lambda_irm * L_irm + lambda_dis * L_dis",
+            "task": cfg.task,
+            "loss_pred": cfg.loss_pred,
+            "loss_cls": cfg.loss_cls,
+            "loss_env": cfg.loss_env,
+            "irm_mode": cfg.irm_mode,
+            "disentangle": cfg.disentangle,
+            "warmup_epochs": cfg.warmup_epochs,
+            "ramp_epochs": cfg.ramp_epochs,
+            "lambda_targets": {"lambda_adv": cfg.lambda_adv, "lambda_irm": cfg.lambda_irm, "lambda_dis": cfg.lambda_dis},
+            "env_class_weights": env_balance.set_index("env_id")["weight"].to_dict() if cfg.loss_env == "weighted_ce" else None,
+        },
         "number_of_envs": len(env_map),
         "class_balance": float(df[cfg.label_col].mean()) if cfg.task == "classification" else None,
         "cns_stats": bbb_metrics.groupby("stratum").size().to_dict() if not bbb_metrics.empty else None,
