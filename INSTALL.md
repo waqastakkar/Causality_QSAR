@@ -117,3 +117,73 @@ python scripts/extract_report.py \
 ```
 
 All report figures are written as SVG and style is globally enforced through Matplotlib rcParams (`savefig.format=svg`, `svg.fonttype=none`) with Times New Roman, bold text, and the fixed 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
+
+## Step 2 — QSAR post-processing (production-grade: tables + provenance + SVG figures)
+
+### Objective
+
+Convert extracted ChEMBL bioactivity into a reproducible QSAR-ready dataset with row-level pIC50 conversion, compound-level aggregation, binary labels, RDKit/Lipinski properties, manuscript-ready SVG figures, and full provenance.
+
+### Inputs
+
+From Step 1:
+
+- `data/interim/extracts/<TARGET>/<TARGET>_qsar_ready.csv`
+
+### Output structure
+
+```text
+data/processed/qsar/<TARGET>/
+├─ data/
+│  ├─ row_level_with_pIC50.csv
+│  ├─ compound_level_pIC50.csv
+│  ├─ compound_level_with_properties.csv
+│  └─ summary.csv
+├─ figures/
+│  ├─ fig_class_balance.svg
+│  ├─ fig_spider_properties_active_vs_inactive.svg
+│  ├─ fig_bubble_mw_vs_logp.svg
+│  ├─ fig_pIC50_distribution.svg
+│  ├─ fig_endpoint_units_relations.svg
+│  └─ fig_missingness_properties.svg
+└─ provenance/
+   ├─ run_config.json
+   ├─ provenance.json
+   └─ environment.txt
+```
+
+### Run Step 2
+
+1) Create folders:
+
+```bash
+mkdir -p data/processed/qsar/CHEMBLXXXX/{data,figures,provenance}
+```
+
+2) Generate data tables:
+
+```bash
+python scripts/qsar_postprocess.py \
+  --input data/interim/extracts/CHEMBLXXXX/CHEMBLXXXX_qsar_ready.csv \
+  --outdir data/processed/qsar/CHEMBLXXXX/data \
+  --endpoint IC50 \
+  --threshold 6.0 \
+  --aggregate best \
+  --prefer_pchembl \
+  --svg
+```
+
+3) Generate figures + provenance:
+
+```bash
+python scripts/qsar_postprocess_report.py \
+  --input_dir data/processed/qsar/CHEMBLXXXX/data \
+  --outdir data/processed/qsar/CHEMBLXXXX \
+  --svg \
+  --font "Times New Roman" \
+  --bold_text \
+  --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+All Step 2 figures are emitted as SVG (editable text, not paths) with `svg.fonttype=none`, Times New Roman, bold text (titles/labels/ticks/legend), and a fixed colorblind-friendly Nature palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
