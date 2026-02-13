@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 from typing import Sequence
 
-import matplotlib as mpl
+try:
+    import matplotlib as mpl
+except Exception:
+    mpl = None
 
 NATURE5 = ["#E69F00", "#009E73", "#0072B2", "#D55E00", "#CC79A7"]
 
@@ -20,9 +24,33 @@ class PlotStyle:
     palette: Sequence[str] = tuple(NATURE5)
 
 
+def add_plot_style_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--svg", action="store_true", default=True, help="Write SVG figures")
+    parser.add_argument("--font", default="Times New Roman", help="Global font family")
+    parser.add_argument("--bold_text", action="store_true", default=True, help="Bold all text")
+    parser.add_argument("--palette", default="nature5", help="Color palette name or comma-separated colors")
+    parser.add_argument("--font_title", type=int, default=16)
+    parser.add_argument("--font_label", type=int, default=14)
+    parser.add_argument("--font_tick", type=int, default=12)
+    parser.add_argument("--font_legend", type=int, default=12)
+
+
+def style_from_args(args: argparse.Namespace) -> PlotStyle:
+    return PlotStyle(
+        font_family=args.font,
+        font_title=args.font_title,
+        font_label=args.font_label,
+        font_tick=args.font_tick,
+        font_legend=args.font_legend,
+        bold_text=bool(args.bold_text),
+        palette=parse_palette(args.palette),
+    )
+
+
 def configure_matplotlib(style: PlotStyle, svg: bool = True) -> None:
-    if svg:
-        mpl.rcParams["savefig.format"] = "svg"
+    if mpl is None:
+        raise RuntimeError("matplotlib is required for plotting")
+    mpl.rcParams["savefig.format"] = "svg" if svg else mpl.rcParams.get("savefig.format", "png")
     mpl.rcParams["svg.fonttype"] = "none"
     mpl.rcParams["font.family"] = style.font_family
     mpl.rcParams["font.weight"] = "bold" if style.bold_text else "normal"
@@ -47,9 +75,13 @@ def style_axis(ax, style: PlotStyle, title: str | None = None, xlabel: str | Non
         for text in legend.get_texts():
             text.set_fontsize(style.font_legend)
             text.set_fontweight(w)
+        if legend.get_title() is not None:
+            legend.get_title().set_fontsize(style.font_legend)
+            legend.get_title().set_fontweight(w)
 
 
 def parse_palette(palette: str) -> list[str]:
     if palette == "nature5":
         return NATURE5
-    return [c.strip() for c in palette.split(",") if c.strip()]
+    parsed = [c.strip() for c in palette.split(",") if c.strip()]
+    return parsed if parsed else NATURE5

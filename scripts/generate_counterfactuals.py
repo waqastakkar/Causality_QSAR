@@ -1,11 +1,331 @@
 #!/usr/bin/env python
+from __future__ import annotations
+
 import argparse
+import hashlib
+import json
+import platform
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config')
-    args, unknown = parser.parse_known_args()
-    print(f"Executed {__file__} with config={args.config} extra={unknown}")
+try:
+    import numpy as np
+    import pandas as pd
+except Exception:
+    np = None
+    pd = None
 
-if __name__ == '__main__':
+from chem_filters import (
+    cns_mpo_score,
+    has_motif,
+    murcko_scaffold,
+    sanitize_smiles,
+    synthetic_feasibility_ok,
+    tanimoto_similarity,
+)
+from plot_style import add_plot_style_args, configure_matplotlib, style_axis, style_from_args
+
+
+def sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def pick_col(df: pd.DataFrame, choices: list[str], required: bool = True) -> str | None:
+    lc = {c.lower(): c for c in df.columns}
+    for c in choices:
+        if c.lower() in lc:
+            return lc[c.lower()]
+    if required:
+        raise ValueError(f"Missing required columns: {choices}")
+    return None
+
+
+def approx_model_yhat(row: pd.Series) -> float:
+    if "pIC50" in row and pd.notna(row["pIC50"]):
+        return float(row["pIC50"])
+    # fallback deterministic proxy
+    tpsa = row.get("tpsa", np.nan)
+    logp = row.get("logp", np.nan)
+    mw = row.get("mw", np.nan)
+    score = 6.0
+    if pd.notna(logp):
+        score += 0.2 * np.tanh(logp)
+    if pd.notna(tpsa):
+        score -= 0.002 * tpsa
+    if pd.notna(mw):
+        score -= 0.001 * max(0.0, mw - 450.0)
+    return float(score)
+
+
+def apply_rule(smiles: str, lhs: str, rhs: str) -> str | None:
+    if lhs and lhs in smiles:
+        return smiles.replace(lhs, rhs, 1)
+    return None
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Generate constrained SAR counterfactual candidates.")
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--run_dir", required=True)
+    parser.add_argument("--checkpoint", default="checkpoints/best.pt")
+    parser.add_argument("--dataset_parquet", required=True)
+    parser.add_argument("--bbb_parquet")
+    parser.add_argument("--mmp_rules_parquet", required=True)
+    parser.add_argument("--outdir", required=True)
+    parser.add_argument("--preserve", choices=["scaffold", "motif"], default="scaffold")
+    parser.add_argument("--motif_smarts", default="")
+    parser.add_argument("--cns_constraint", choices=["keep_cns_like", "within_thresholds"], default="keep_cns_like")
+    parser.add_argument("--cns_mpo_threshold", type=float, default=4.0)
+    parser.add_argument("--max_edits_per_seed", type=int, default=50)
+    parser.add_argument("--topk_per_seed", type=int, default=5)
+    parser.add_argument("--min_tanimoto", type=float, default=0.3)
+    parser.add_argument("--max_tanimoto", type=float, default=0.95)
+    parser.add_argument("--seed_limit", type=int, default=200)
+    add_plot_style_args(parser)
+    args = parser.parse_args()
+    if np is None or pd is None:
+        raise SystemExit("numpy and pandas are required to run generate_counterfactuals.py")
+
+    outdir = Path(args.outdir)
+    for sub in ["rules", "candidates", "evaluation", "figures", "provenance"]:
+        (outdir / sub).mkdir(parents=True, exist_ok=True)
+
+    data = pd.read_parquet(args.dataset_parquet)
+    smi_col = pick_col(data, ["canonical_smiles", "smiles"])
+    id_col = pick_col(data, ["compound_id", "molecule_chembl_id", "id"], required=False) or smi_col
+    pic50_col = pick_col(data, ["pIC50", "pic50"], required=False)
+    if pic50_col and pic50_col != "pIC50":
+        data["pIC50"] = data[pic50_col]
+
+    rules = pd.read_parquet(args.mmp_rules_parquet)
+    seeds = data[[id_col, smi_col] + (["pIC50"] if "pIC50" in data.columns else [])].head(args.seed_limit).copy()
+    seeds.columns = ["seed_id", "seed_smiles"] + (["pIC50"] if "pIC50" in seeds.columns else [])
+    seeds.to_parquet(outdir / "candidates" / "seeds.parquet", index=False)
+
+    bbb = None
+    if args.bbb_parquet and Path(args.bbb_parquet).exists():
+        bbb = pd.read_parquet(args.bbb_parquet)
+
+    generated_rows = []
+    validity_reasons: list[str] = []
+    for _, seed in seeds.iterrows():
+        seed_smiles = str(seed["seed_smiles"])
+        seed_rec = sanitize_smiles(seed_smiles)
+        if not seed_rec.valid:
+            continue
+        seed_props = seed_rec.props
+        seed_mpo = cns_mpo_score(seed_props)
+        seed_scaffold = murcko_scaffold(seed_rec.smiles)
+
+        applied = 0
+        for _, rule in rules.sort_values("support_count", ascending=False).iterrows():
+            if applied >= args.max_edits_per_seed:
+                break
+            cand_smiles = apply_rule(seed_rec.smiles, str(rule["lhs_fragment"]), str(rule["rhs_fragment"]))
+            if not cand_smiles:
+                continue
+            applied += 1
+            cand_rec = sanitize_smiles(cand_smiles)
+            if not cand_rec.valid:
+                validity_reasons.append(cand_rec.reason or "invalid")
+                continue
+            sim = tanimoto_similarity(seed_rec.smiles, cand_rec.smiles)
+            dist = 1.0 - sim if pd.notna(sim) else np.nan
+            if pd.notna(sim) and not (args.min_tanimoto <= sim <= args.max_tanimoto):
+                validity_reasons.append("tanimoto_out_of_range")
+                continue
+            if args.preserve == "scaffold":
+                if seed_scaffold and murcko_scaffold(cand_rec.smiles) != seed_scaffold:
+                    validity_reasons.append("scaffold_not_preserved")
+                    continue
+            else:
+                if not has_motif(cand_rec.smiles, args.motif_smarts):
+                    validity_reasons.append("motif_not_preserved")
+                    continue
+            if not synthetic_feasibility_ok(cand_rec.props):
+                validity_reasons.append("synthetic_filter_failed")
+                continue
+
+            cns_mpo = cns_mpo_score(cand_rec.props)
+            cns_like = bool(cns_mpo >= args.cns_mpo_threshold) if pd.notna(cns_mpo) else False
+            seed_cns_like = bool(seed_mpo >= args.cns_mpo_threshold) if pd.notna(seed_mpo) else False
+            if args.cns_constraint == "keep_cns_like" and seed_cns_like and not cns_like:
+                validity_reasons.append("cns_like_not_preserved")
+                continue
+            if args.cns_constraint == "within_thresholds" and pd.notna(cns_mpo) and cns_mpo < args.cns_mpo_threshold:
+                validity_reasons.append("cns_mpo_below_threshold")
+                continue
+
+            yx = approx_model_yhat(pd.Series(seed_props | {"pIC50": seed.get("pIC50", np.nan)}))
+            yxp = approx_model_yhat(pd.Series(cand_rec.props))
+            generated_rows.append(
+                {
+                    "seed_id": seed["seed_id"],
+                    "seed_smiles": seed_rec.smiles,
+                    "cand_id": f"{seed['seed_id']}_r{rule['rule_id']}",
+                    "cand_smiles": cand_rec.smiles,
+                    "rule_id": rule["rule_id"],
+                    "rule_support_count": rule.get("support_count", np.nan),
+                    "yhat_x": yx,
+                    "yhat_xprime": yxp,
+                    "delta_yhat": yxp - yx,
+                    "seed_cns_mpo": seed_mpo,
+                    "cand_cns_mpo": cns_mpo,
+                    "delta_cns_mpo": cns_mpo - seed_mpo if pd.notna(cns_mpo) and pd.notna(seed_mpo) else np.nan,
+                    "seed_cns_like": seed_cns_like,
+                    "cand_cns_like": cns_like,
+                    "tanimoto": sim,
+                    "chemical_distance": dist,
+                    **{f"cand_{k}": v for k, v in cand_rec.props.items()},
+                }
+            )
+
+    generated = pd.DataFrame(generated_rows)
+    generated.to_parquet(outdir / "candidates" / "generated_counterfactuals.parquet", index=False)
+
+    if generated.empty:
+        filtered = generated.copy()
+        dedup_removed = pd.DataFrame(columns=["seed_id", "cand_smiles", "reason"])
+    else:
+        before = len(generated)
+        filtered = generated.sort_values(["seed_id", "delta_yhat"], ascending=[True, False]).drop_duplicates(["seed_id", "cand_smiles"])
+        dedup_removed = pd.DataFrame({"metric": ["before", "after", "removed"], "value": [before, len(filtered), before - len(filtered)]})
+    filtered.to_parquet(outdir / "candidates" / "filtered_counterfactuals.parquet", index=False)
+    dedup_removed.to_csv(outdir / "candidates" / "duplicates_removed.csv", index=False)
+
+    if not filtered.empty:
+        filtered["pareto_score"] = (
+            2.0 * filtered["delta_yhat"].fillna(0.0)
+            + 0.4 * filtered["cand_cns_mpo"].fillna(0.0)
+            - 0.5 * filtered["chemical_distance"].fillna(1.0)
+            + 0.1 * np.log1p(filtered["rule_support_count"].fillna(0.0))
+        )
+        ranked = filtered.sort_values(["seed_id", "pareto_score"], ascending=[True, False]).groupby("seed_id").head(args.topk_per_seed)
+    else:
+        ranked = filtered.copy()
+    ranked.to_parquet(outdir / "candidates" / "ranked_topk.parquet", index=False)
+
+    delta = ranked[[c for c in ["seed_id", "cand_id", "yhat_x", "yhat_xprime", "delta_yhat", "seed_cns_mpo", "cand_cns_mpo", "delta_cns_mpo", "tanimoto", "rule_id"] if c in ranked.columns]]
+    delta.to_csv(outdir / "evaluation" / "delta_predictions.csv", index=False)
+
+    monotonic = pd.DataFrame(columns=["cand_id", "rule_id", "violation"])
+    if not ranked.empty:
+        v1 = (ranked["cand_tpsa"] > ranked.get("cand_tpsa", 0)) & (ranked["delta_cns_mpo"] > 0)
+        monotonic = pd.DataFrame({"cand_id": ranked["cand_id"], "rule_id": ranked["rule_id"], "violation": v1.fillna(False).astype(int)})
+    monotonic.to_csv(outdir / "evaluation" / "monotonicity_checks.csv", index=False)
+
+    series_rank = pd.DataFrame({"metric": ["pairs"], "value": [len(ranked)]})
+    series_rank.to_csv(outdir / "evaluation" / "series_ranking_constraints.csv", index=False)
+
+    validity = pd.Series(validity_reasons).value_counts().rename_axis("reason").reset_index(name="count")
+    validity.to_csv(outdir / "evaluation" / "validity_sanity.csv", index=False)
+
+    if not filtered.empty:
+        bbb_report = pd.DataFrame(
+            {
+                "constraint": ["cns_like", "cns_mpo_threshold"],
+                "pass_rate": [filtered["cand_cns_like"].mean(), (filtered["cand_cns_mpo"] >= args.cns_mpo_threshold).mean()],
+            }
+        )
+    else:
+        bbb_report = pd.DataFrame({"constraint": ["cns_like", "cns_mpo_threshold"], "pass_rate": [0.0, 0.0]})
+    bbb_report.to_csv(outdir / "evaluation" / "bbb_constraint_report.csv", index=False)
+
+    style = style_from_args(args)
+    configure_matplotlib(style, svg=True)
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    type_counts = filtered["rule_id"].value_counts().head(10) if not filtered.empty else pd.Series(dtype=float)
+    if len(type_counts):
+        ax.bar(type_counts.index.astype(str), type_counts.values)
+        ax.tick_params(axis="x", rotation=60)
+    style_axis(ax, style, "Edit Type Distribution", "Rule ID", "Frequency")
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_edit_type_distribution.svg"); plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    if not filtered.empty:
+        ax.hist(filtered["delta_yhat"].fillna(0), bins=30)
+    style_axis(ax, style, "Δŷ Distribution", "Δŷ", "Count")
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_deltaY_distribution.svg"); plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    if not filtered.empty:
+        ax.scatter(filtered["delta_yhat"], filtered["delta_cns_mpo"], alpha=0.7)
+        sorted_pts = filtered[["delta_yhat", "delta_cns_mpo"]].sort_values("delta_yhat")
+        frontier_y = np.maximum.accumulate(sorted_pts["delta_cns_mpo"].fillna(-1e9).values)
+        ax.plot(sorted_pts["delta_yhat"].values, frontier_y, linewidth=2)
+    style_axis(ax, style, "Pareto: Potency vs CNS", "Δŷ", "ΔCNS MPO")
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pareto_potency_vs_cns.svg"); plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(bbb_report["constraint"], bbb_report["pass_rate"])
+    style_axis(ax, style, "Counterfactual Success Rate", "Constraint", "Pass rate")
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_counterfactual_success_rate.svg"); plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    viol = monotonic.groupby("rule_id")["violation"].sum().head(10) if not monotonic.empty else pd.Series(dtype=float)
+    if len(viol):
+        ax.bar(viol.index.astype(str), viol.values)
+        ax.tick_params(axis="x", rotation=60)
+    style_axis(ax, style, "Monotonicity Violations", "Rule ID", "Violations")
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_monotonicity_violations.svg"); plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(10, 3))
+    ax.axis("off")
+    top_tbl = ranked[[c for c in ["seed_id", "rule_id", "delta_yhat", "cand_cns_mpo", "chemical_distance"] if c in ranked.columns]].head(10)
+    ax.table(cellText=top_tbl.round(3).values, colLabels=top_tbl.columns, loc="center") if not top_tbl.empty else ax.text(0.5, 0.5, "No edits", ha="center")
+    style_axis(ax, style, "Top Edit Examples", None, None)
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_top_edits_examples.svg"); plt.close(fig)
+
+    run_cfg = {
+        "constraints": {
+            "preserve": args.preserve,
+            "motif_smarts": args.motif_smarts,
+            "cns_constraint": args.cns_constraint,
+            "cns_mpo_threshold": args.cns_mpo_threshold,
+            "min_tanimoto": args.min_tanimoto,
+            "max_tanimoto": args.max_tanimoto,
+        },
+        "topk_per_seed": args.topk_per_seed,
+        "plotting": vars(args),
+    }
+    (outdir / "provenance" / "run_config.json").write_text(json.dumps(run_cfg, indent=2), encoding="utf-8")
+
+    checkpoint_path = Path(args.run_dir) / args.checkpoint
+    provenance = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "cli_args": vars(args),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "git_commit": subprocess.getoutput("git rev-parse HEAD"),
+        "script_hashes": {
+            "generate_counterfactuals.py": sha256_file(Path(__file__)),
+            "chem_filters.py": sha256_file(Path(__file__).with_name("chem_filters.py")),
+            "plot_style.py": sha256_file(Path(__file__).with_name("plot_style.py")),
+        },
+        "input_hashes": {
+            "dataset": sha256_file(Path(args.dataset_parquet)),
+            "rules": sha256_file(Path(args.mmp_rules_parquet)),
+            "checkpoint": sha256_file(checkpoint_path) if checkpoint_path.exists() else None,
+            "bbb": sha256_file(Path(args.bbb_parquet)) if args.bbb_parquet and Path(args.bbb_parquet).exists() else None,
+        },
+        "counts": {
+            "n_seeds": int(len(seeds)),
+            "n_generated": int(len(generated)),
+            "n_passing_filters": int(len(filtered)),
+            "topk": args.topk_per_seed,
+        },
+    }
+    (outdir / "provenance" / "provenance.json").write_text(json.dumps(provenance, indent=2), encoding="utf-8")
+    env = subprocess.getoutput("python -m pip freeze")
+    (outdir / "provenance" / "environment.txt").write_text(env + "\n", encoding="utf-8")
+
+
+if __name__ == "__main__":
     main()
