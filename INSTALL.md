@@ -544,3 +544,90 @@ python scripts/train_causal_qsar.py \
   --svg --font "Times New Roman" --bold_text --palette nature5 \
   --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
 ```
+
+## Step 7 — Counterfactual SAR (valid edits + BBB constraints + consistency training)
+
+### Step 7 output structure
+
+```text
+outputs/counterfactuals/<TARGET>/<run_id>/
+├─ rules/
+│  ├─ mmp_rules.parquet
+│  ├─ rule_stats.csv
+│  └─ rule_provenance.json
+├─ candidates/
+│  ├─ seeds.parquet
+│  ├─ generated_counterfactuals.parquet
+│  ├─ filtered_counterfactuals.parquet
+│  ├─ ranked_topk.parquet
+│  └─ duplicates_removed.csv
+├─ evaluation/
+│  ├─ delta_predictions.csv
+│  ├─ series_ranking_constraints.csv
+│  ├─ monotonicity_checks.csv
+│  ├─ validity_sanity.csv
+│  └─ bbb_constraint_report.csv
+├─ figures/
+│  ├─ fig_edit_type_distribution.svg
+│  ├─ fig_deltaY_distribution.svg
+│  ├─ fig_pareto_potency_vs_cns.svg
+│  ├─ fig_counterfactual_success_rate.svg
+│  ├─ fig_monotonicity_violations.svg
+│  └─ fig_top_edits_examples.svg
+└─ provenance/
+   ├─ run_config.json
+   ├─ provenance.json
+   └─ environment.txt
+```
+
+### 7.1 Build MMP rules
+
+```bash
+python scripts/build_mmp_rules.py \
+  --target CHEMBLXXXX \
+  --input_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --outdir outputs/counterfactuals/CHEMBLXXXX/<RUN_ID> \
+  --min_support 10 \
+  --max_cut_bonds 1 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### 7.2 Generate constrained counterfactuals and rank edits
+
+```bash
+python scripts/generate_counterfactuals.py \
+  --target CHEMBLXXXX \
+  --run_dir outputs/runs/CHEMBLXXXX/scaffold_bm/<RUN_ID> \
+  --checkpoint checkpoints/best.pt \
+  --dataset_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --bbb_parquet data/processed/bbb/CHEMBLXXXX/data/bbb_annotations.parquet \
+  --mmp_rules_parquet outputs/counterfactuals/CHEMBLXXXX/<RUN_ID>/rules/mmp_rules.parquet \
+  --outdir outputs/counterfactuals/CHEMBLXXXX/<RUN_ID> \
+  --preserve scaffold \
+  --cns_constraint keep_cns_like \
+  --cns_mpo_threshold 4.0 \
+  --max_edits_per_seed 50 \
+  --topk_per_seed 5 \
+  --min_tanimoto 0.3 --max_tanimoto 0.95 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+### 7.3 Optional fine-tuning with counterfactual consistency loss
+
+```bash
+python scripts/finetune_with_counterfactuals.py \
+  --target CHEMBLXXXX \
+  --base_run_dir outputs/runs/CHEMBLXXXX/scaffold_bm/<RUN_ID> \
+  --counterfactuals_parquet outputs/counterfactuals/CHEMBLXXXX/<RUN_ID>/candidates/filtered_counterfactuals.parquet \
+  --dataset_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --outdir outputs/runs/CHEMBLXXXX/scaffold_bm/<RUN_ID>_cf \
+  --lambda_cf 0.2 \
+  --cf_mode ranking+monotonic+smooth \
+  --epochs 20 --lr 5e-5 --seed 42 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```
+
+Step 7 figure contract: SVG only (`savefig.format=svg`, `svg.fonttype=none`), Times New Roman, all text bold (titles/labels/ticks/legend), configurable font sizes, and the fixed Nature 5-color palette (`#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`).
