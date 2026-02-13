@@ -474,3 +474,73 @@ python scripts/run_benchmark.py \
 ```
 
 All Step 5 figures are SVG only with editable text (`svg.fonttype=none`), Times New Roman, bold titles/labels/ticks/legend, configurable font sizes, and the fixed Nature 5-color palette: `#E69F00`, `#009E73`, `#0072B2`, `#D55E00`, `#CC79A7`.
+
+## Step 6 — Exact training objective (production-grade + Nature-level)
+
+### Objective
+
+Step 6 extends Step 5 training with a fully specified objective:
+
+`L = L_pred + lambda_adv * L_env + lambda_irm * L_irm + lambda_dis * L_dis`
+
+with modular loss modes, environment imbalance correction, warmup+ramp schedules, and per-epoch diagnostics.
+
+### Supported loss options
+
+- Prediction loss:
+  - Regression: `--loss_pred {mse,huber}`
+  - Classification: `--loss_cls {bce,focal}`
+  - Optional sample weighting: `--sample_weight_col <column_name>`
+- Adversarial invariance loss: `--loss_env {ce,weighted_ce}`
+  - `weighted_ce` uses inverse-frequency env class weights from training split.
+- IRM penalty: `--irm_mode {none,irmv1}`
+  - IRMv1 computes per-environment risk and squared gradient norm wrt scalar dummy scale.
+- Disentanglement loss: `--disentangle {none,orthogonality,hsic}`
+  - Logs cosine similarity and HSIC diagnostics each epoch.
+
+### Stable schedule
+
+- Warmup: `--warmup_epochs N` trains with `L_pred` only.
+- Ramp: `--ramp_epochs R` linearly ramps `lambda_adv/lambda_irm/lambda_dis` from `0` to target.
+- Schedule is saved to `reports/schedule.csv`.
+
+### Step 6 artifacts
+
+Additional outputs in:
+
+`outputs/runs/<TARGET>/<split>/<run_id>/`
+
+- `reports/loss_breakdown.csv`
+- `reports/irm_diagnostics.csv` (when `--irm_mode irmv1`)
+- `reports/disentanglement_diagnostics.csv` (when `--disentangle != none`)
+- `reports/env_balance.csv`
+- `reports/schedule.csv`
+- `figures/fig_loss_components_over_time.svg`
+- `figures/fig_irm_penalty_over_time.svg`
+- `figures/fig_disentanglement_over_time.svg`
+- `figures/fig_env_weights_distribution.svg`
+
+All Step 6 figures are SVG with editable text (`svg.fonttype=none`) and Times New Roman bold styling with the fixed Nature 5 palette.
+
+### Example command (all components enabled)
+
+```bash
+python scripts/train_causal_qsar.py \
+  --target CHEMBLXXXX \
+  --dataset_parquet data/processed/environments/CHEMBLXXXX/data/multienv_compound_level.parquet \
+  --splits_dir data/processed/splits/CHEMBLXXXX/splits \
+  --split_name env_holdout_pubfam \
+  --outdir outputs/runs \
+  --task regression --label_col pIC50 \
+  --env_col env_id_manual \
+  --encoder gine \
+  --lambda_adv 1.0 --lambda_irm 0.1 --lambda_dis 0.1 \
+  --loss_pred huber \
+  --loss_env weighted_ce \
+  --irm_mode irmv1 \
+  --disentangle orthogonality \
+  --warmup_epochs 10 \
+  --ramp_epochs 30 \
+  --svg --font "Times New Roman" --bold_text --palette nature5 \
+  --font_title 16 --font_label 14 --font_tick 12 --font_legend 12
+```

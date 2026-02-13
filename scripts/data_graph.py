@@ -51,9 +51,10 @@ class GraphBuildConfig:
     id_col: str = "molecule_id"
     label_col: str = "pIC50"
     env_col: str = "env_id_manual"
+    sample_weight_col: str | None = None
 
 
-def smiles_to_data(smiles: str, y: float, env_id: int, molecule_id: str) -> Data | None:
+def smiles_to_data(smiles: str, y: float, env_id: int, molecule_id: str, sample_weight: float = 1.0) -> Data | None:
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
@@ -73,6 +74,7 @@ def smiles_to_data(smiles: str, y: float, env_id: int, molecule_id: str) -> Data
     data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
     data.y = torch.tensor(y, dtype=torch.float)
     data.env = torch.tensor(int(env_id), dtype=torch.long)
+    data.sample_weight = torch.tensor(float(sample_weight), dtype=torch.float)
     data.molecule_id = str(molecule_id)
     return data
 
@@ -85,6 +87,7 @@ def dataframe_to_graphs(df: pd.DataFrame, cfg: GraphBuildConfig) -> list[Data]:
             float(getattr(row, cfg.label_col)),
             int(getattr(row, cfg.env_col)),
             getattr(row, cfg.id_col),
+            float(getattr(row, cfg.sample_weight_col)) if cfg.sample_weight_col and hasattr(row, cfg.sample_weight_col) else 1.0,
         )
         if d is not None:
             graphs.append(d)
