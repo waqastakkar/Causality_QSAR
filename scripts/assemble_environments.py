@@ -134,7 +134,11 @@ def main() -> None:
 
     comp_df["scaffold_id"] = comp_df[smiles_col].map(compute_scaffold)
 
-    comp_df["readout"] = comp_df.get("standard_type", "unknown").fillna("unknown").astype(str)
+    standard_type_col = pick_col(comp_df, ["standard_type", "readout"])
+    if standard_type_col is None:
+        comp_df["readout"] = "unknown"
+    else:
+        comp_df["readout"] = comp_df[standard_type_col].fillna("unknown").astype(str)
     comp_df["chemistry_regime"] = compute_chemistry_regime(comp_df, rules)
 
     comp_df["publication"] = "unknown"
