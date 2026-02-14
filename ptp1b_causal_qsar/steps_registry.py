@@ -251,7 +251,8 @@ def _step6_reserved_builder(config: dict[str, Any], overrides: dict[str, Any]) -
         f"d=Path({step6_out.as_posix()!r}); "
         "d.mkdir(parents=True, exist_ok=True); "
         "[shutil.rmtree(p) if p.is_dir() else p.unlink() for p in d.iterdir()]; "
-        "print('Step 6 reserved/no-op (empty folder)')"
+        "(d / 'README.txt').write_text('Step 6 is intentionally reserved as a no-op placeholder.\\n', encoding='utf-8'); "
+        "print('Step 6 reserved/no-op (marker file written)')"
     )
     return [_python_bin(config), "-c", script]
 
