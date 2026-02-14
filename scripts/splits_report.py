@@ -41,7 +41,10 @@ def mfp(smiles: str):
 def read_ids(path: Path) -> list:
     if not path.exists():
         return []
-    return pd.read_csv(path)["molecule_id"].tolist()
+    ids = pd.read_csv(path)
+    if "molecule_id" not in ids.columns:
+        return []
+    return ids["molecule_id"].astype(str).tolist()
 
 
 def scaffold(smiles: str) -> str:
@@ -66,6 +69,8 @@ def main() -> None:
     figures.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_parquet(args.input_parquet)
+    if "molecule_id" in df.columns:
+        df["molecule_id"] = df["molecule_id"].astype(str)
     if "_scaffold" not in df.columns:
         df["_scaffold"] = df["canonical_smiles"].astype(str).map(scaffold)
 
@@ -179,6 +184,8 @@ def main() -> None:
         style_axis(ax, style, "Covariate shift (KS)", "Property", "Split")
         fig.colorbar(im, ax=ax)
         fig.tight_layout(); fig.savefig(figures / "fig_covariate_shift_props.svg"); plt.close(fig)
+    else:
+        (figures / "fig_covariate_shift_props.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">No covariate-shift data</text></svg>')
 
     for fname, dff, y, title in [
         ("fig_scaffold_overlap_by_split.svg", scaf_df, "overlap_fraction_test", "Scaffold overlap by split"),
