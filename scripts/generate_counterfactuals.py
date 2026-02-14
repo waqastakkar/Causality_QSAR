@@ -6,6 +6,7 @@ import hashlib
 import json
 import platform
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -66,6 +67,22 @@ def apply_rule(smiles: str, lhs: str, rhs: str) -> str | None:
     if lhs and lhs in smiles:
         return smiles.replace(lhs, rhs, 1)
     return None
+
+
+def write_no_data_svg(path: Path, label: str = "NO DATA (0 rows)") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "\n".join(
+            [
+                "<svg xmlns='http://www.w3.org/2000/svg' width='420' height='120' viewBox='0 0 420 120'>",
+                "  <rect width='420' height='120' fill='white' stroke='#999'/>",
+                f"  <text x='210' y='68' font-size='24' text-anchor='middle' fill='#333' font-family='Arial'>{label}</text>",
+                "</svg>",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def main() -> None:
@@ -186,7 +203,8 @@ def main() -> None:
             )
 
     generated = pd.DataFrame(generated_rows)
-    generated.to_parquet(outdir / "candidates" / "generated_counterfactuals.parquet", index=False)
+    generated_path = outdir / "candidates" / "generated_counterfactuals.parquet"
+    generated.to_parquet(generated_path, index=False)
 
     if generated.empty:
         filtered = generated.copy()
@@ -195,7 +213,8 @@ def main() -> None:
         before = len(generated)
         filtered = generated.sort_values(["seed_id", "delta_yhat"], ascending=[True, False]).drop_duplicates(["seed_id", "cand_smiles"])
         dedup_removed = pd.DataFrame({"metric": ["before", "after", "removed"], "value": [before, len(filtered), before - len(filtered)]})
-    filtered.to_parquet(outdir / "candidates" / "filtered_counterfactuals.parquet", index=False)
+    filtered_path = outdir / "candidates" / "filtered_counterfactuals.parquet"
+    filtered.to_parquet(filtered_path, index=False)
     dedup_removed.to_csv(outdir / "candidates" / "duplicates_removed.csv", index=False)
 
     if not filtered.empty:
@@ -208,7 +227,41 @@ def main() -> None:
         ranked = filtered.sort_values(["seed_id", "pareto_score"], ascending=[True, False]).groupby("seed_id").head(args.topk_per_seed)
     else:
         ranked = filtered.copy()
-    ranked.to_parquet(outdir / "candidates" / "ranked_topk.parquet", index=False)
+    ranked_path = outdir / "candidates" / "ranked_topk.parquet"
+    ranked.to_parquet(ranked_path, index=False)
+
+    n_seeds = len(seeds)
+    n_generated = len(generated)
+    n_filtered = len(filtered)
+    n_ranked = len(ranked)
+    print(
+        "Counterfactual row counts: "
+        f"n_seeds={n_seeds}, n_generated={n_generated}, n_filtered={n_filtered}, n_ranked={n_ranked}",
+        file=sys.stderr,
+    )
+    if n_filtered == 0:
+        reason_counts = pd.Series(validity_reasons).value_counts()
+        top_reasons = reason_counts.head(5).to_dict() if not reason_counts.empty else {}
+        diagnostics = {
+            "n_missing_cns_mpo": int(generated["cand_cns_mpo"].isna().sum()) if "cand_cns_mpo" in generated.columns else 0,
+            "n_property_nan_rows": int(
+                generated[[c for c in ["yhat_x", "yhat_xprime", "delta_yhat", "seed_cns_mpo", "cand_cns_mpo"] if c in generated.columns]]
+                .isna()
+                .any(axis=1)
+                .sum()
+            ) if not generated.empty else 0,
+            "cns_mpo_threshold": args.cns_mpo_threshold,
+            "cns_constraint": args.cns_constraint,
+            "top_filter_reasons": top_reasons,
+        }
+        print(f"n_filtered is 0; likely causes: {json.dumps(diagnostics, sort_keys=True)}", file=sys.stderr)
+
+    for parquet_path in [generated_path, filtered_path, ranked_path]:
+        try:
+            if pd.read_parquet(parquet_path).shape[0] == 0:
+                write_no_data_svg(outdir / "figures" / f"{parquet_path.stem}_no_data.svg")
+        except Exception as exc:
+            print(f"Could not inspect {parquet_path}: {exc}", file=sys.stderr)
 
     delta = ranked[[c for c in ["seed_id", "cand_id", "yhat_x", "yhat_xprime", "delta_yhat", "seed_cns_mpo", "cand_cns_mpo", "delta_cns_mpo", "tanimoto", "rule_id"] if c in ranked.columns]]
     delta.to_csv(outdir / "evaluation" / "delta_predictions.csv", index=False)
@@ -240,41 +293,53 @@ def main() -> None:
     configure_matplotlib(style, svg=True)
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig_path = outdir / "figures" / "fig_edit_type_distribution.svg"
     type_counts = filtered["rule_id"].value_counts().head(10) if not filtered.empty else pd.Series(dtype=float)
-    if len(type_counts):
+    if not len(type_counts):
+        write_no_data_svg(fig_path)
+    else:
+        fig, ax = plt.subplots(figsize=(6, 4))
         ax.bar(type_counts.index.astype(str), type_counts.values)
         ax.tick_params(axis="x", rotation=60)
-    style_axis(ax, style, "Edit Type Distribution", "Rule ID", "Frequency")
-    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_edit_type_distribution.svg"); plt.close(fig)
+        style_axis(ax, style, "Edit Type Distribution", "Rule ID", "Frequency")
+        fig.tight_layout(); fig.savefig(fig_path); plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    if not filtered.empty:
+    fig_path = outdir / "figures" / "fig_deltaY_distribution.svg"
+    if filtered.empty:
+        write_no_data_svg(fig_path)
+    else:
+        fig, ax = plt.subplots(figsize=(6, 4))
         ax.hist(filtered["delta_yhat"].fillna(0), bins=30)
-    style_axis(ax, style, "Δŷ Distribution", "Δŷ", "Count")
-    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_deltaY_distribution.svg"); plt.close(fig)
+        style_axis(ax, style, "Δŷ Distribution", "Δŷ", "Count")
+        fig.tight_layout(); fig.savefig(fig_path); plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    if not filtered.empty:
+    fig_path = outdir / "figures" / "fig_pareto_potency_vs_cns.svg"
+    if filtered.empty:
+        write_no_data_svg(fig_path)
+    else:
+        fig, ax = plt.subplots(figsize=(6, 4))
         ax.scatter(filtered["delta_yhat"], filtered["delta_cns_mpo"], alpha=0.7)
         sorted_pts = filtered[["delta_yhat", "delta_cns_mpo"]].sort_values("delta_yhat")
         frontier_y = np.maximum.accumulate(sorted_pts["delta_cns_mpo"].fillna(-1e9).values)
         ax.plot(sorted_pts["delta_yhat"].values, frontier_y, linewidth=2)
-    style_axis(ax, style, "Pareto: Potency vs CNS", "Δŷ", "ΔCNS MPO")
-    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pareto_potency_vs_cns.svg"); plt.close(fig)
+        style_axis(ax, style, "Pareto: Potency vs CNS", "Δŷ", "ΔCNS MPO")
+        fig.tight_layout(); fig.savefig(fig_path); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.bar(bbb_report["constraint"], bbb_report["pass_rate"])
     style_axis(ax, style, "Counterfactual Success Rate", "Constraint", "Pass rate")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_counterfactual_success_rate.svg"); plt.close(fig)
 
-    fig, ax = plt.subplots(figsize=(6, 4))
+    fig_path = outdir / "figures" / "fig_monotonicity_violations.svg"
     viol = monotonic.groupby("rule_id")["violation"].sum().head(10) if not monotonic.empty else pd.Series(dtype=float)
-    if len(viol):
+    if not len(viol):
+        write_no_data_svg(fig_path)
+    else:
+        fig, ax = plt.subplots(figsize=(6, 4))
         ax.bar(viol.index.astype(str), viol.values)
         ax.tick_params(axis="x", rotation=60)
-    style_axis(ax, style, "Monotonicity Violations", "Rule ID", "Violations")
-    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_monotonicity_violations.svg"); plt.close(fig)
+        style_axis(ax, style, "Monotonicity Violations", "Rule ID", "Violations")
+        fig.tight_layout(); fig.savefig(fig_path); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 3))
     ax.axis("off")
@@ -316,9 +381,11 @@ def main() -> None:
             "bbb": sha256_file(Path(args.bbb_parquet)) if args.bbb_parquet and Path(args.bbb_parquet).exists() else None,
         },
         "counts": {
-            "n_seeds": int(len(seeds)),
-            "n_generated": int(len(generated)),
-            "n_passing_filters": int(len(filtered)),
+            "n_seeds": int(n_seeds),
+            "n_generated": int(n_generated),
+            "n_filtered": int(n_filtered),
+            "n_ranked": int(n_ranked),
+            "n_passing_filters": int(n_filtered),
             "topk": args.topk_per_seed,
         },
     }
