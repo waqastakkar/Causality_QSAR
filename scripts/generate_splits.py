@@ -17,11 +17,24 @@ def parse_args() -> argparse.Namespace:
 
 
 def _resolve_outputs_root(config_path: Path, cfg: dict) -> Path:
-    outputs_root = Path(cfg.get("paths", {}).get("outputs_root", "outputs"))
-    if not outputs_root.is_absolute():
-        outputs_root = (config_path.parent / outputs_root).resolve()
-    outputs_root.mkdir(parents=True, exist_ok=True)
-    return outputs_root
+    configured = Path(cfg.get("paths", {}).get("outputs_root", "outputs"))
+    if configured.is_absolute():
+        configured.mkdir(parents=True, exist_ok=True)
+        return configured
+
+    candidates = [
+        (Path.cwd() / configured).resolve(),
+        (config_path.parent / configured).resolve(),
+        (config_path.parent.parent / configured).resolve(),
+    ]
+
+    for candidate in candidates:
+        if (candidate / "step3" / "multienv_compound_level.parquet").exists():
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+
+    candidates[0].mkdir(parents=True, exist_ok=True)
+    return candidates[0]
 
 
 def main() -> None:
