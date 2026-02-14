@@ -448,18 +448,25 @@ def main():
     cal_df.to_csv(run_root / "reports/calibration.csv", index=False)
 
     bbb_metrics = pd.DataFrame()
+    merged_bbb = test_df.copy()
     if cfg.bbb_parquet:
         bbb = pd.read_parquet(cfg.bbb_parquet)
-        merged = test_df.merge(bbb, on="molecule_id", how="left")
-        strat_cols = [c for c in ["cns_like", "cns_mpo_bin"] if c in merged.columns]
-        rows = []
-        for c in strat_cols:
-            for value, g in merged.groupby(c):
-                if len(g) < 2:
-                    continue
-                m = regression_metrics(g.y_true, g.y_pred) if cfg.task == "regression" else classification_metrics(g.y_true, g.y_pred)
-                rows.append({"stratum": c, "value": value, **m, "n": len(g)})
-        bbb_metrics = pd.DataFrame(rows)
+        bbb_id_col = _first_present(bbb, ["molecule_id", "molecule_chembl_id", "compound_id", "mol_id", "id"])
+        if bbb_id_col is not None:
+            bbb = bbb.copy()
+            bbb["molecule_id"] = bbb[bbb_id_col].astype(str)
+            bbb = bbb.drop_duplicates(subset=["molecule_id"])
+            merged_bbb = merged_bbb.merge(bbb, on="molecule_id", how="left", suffixes=("", "_bbb"))
+
+    strat_cols = [c for c in ["cns_like", "is_cns_like", "cns_mpo_bin"] if c in merged_bbb.columns]
+    rows = []
+    for c in strat_cols:
+        for value, g in merged_bbb.groupby(c, dropna=True):
+            if len(g) < 2:
+                continue
+            m = regression_metrics(g.y_true, g.y_pred) if cfg.task == "regression" else classification_metrics(g.y_true, g.y_pred)
+            rows.append({"stratum": c, "value": value, **m, "n": len(g)})
+    bbb_metrics = pd.DataFrame(rows)
     bbb_metrics.to_csv(run_root / "reports/bbb_metrics.csv", index=False)
 
     ablation = pd.DataFrame(
