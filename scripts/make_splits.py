@@ -6,6 +6,7 @@ import hashlib
 import json
 import platform
 import subprocess
+import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,10 @@ try:
     from rdkit.ML.Cluster import Butina
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("RDKit is required for make_splits.py") from exc
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.plot_style import NATURE5
 
