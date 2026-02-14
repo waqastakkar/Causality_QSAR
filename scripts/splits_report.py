@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--font_tick", type=int, default=12)
     p.add_argument("--font_legend", type=int, default=12)
     p.add_argument("--palette", default="nature5")
+    p.add_argument("--id_col", default="molecule_id")
     return p.parse_args()
 
 
@@ -41,13 +42,13 @@ def mfp(smiles: str):
     return AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
 
 
-def read_ids(path: Path) -> list:
+def read_ids(path: Path, id_col: str) -> list:
     if not path.exists():
         return []
     ids = pd.read_csv(path)
-    if "molecule_id" not in ids.columns:
+    if id_col not in ids.columns:
         return []
-    return ids["molecule_id"].astype(str).tolist()
+    return ids[id_col].astype(str).tolist()
 
 
 def scaffold(smiles: str) -> str:
@@ -72,8 +73,12 @@ def main() -> None:
     figures.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_parquet(args.input_parquet)
-    if "molecule_id" in df.columns:
-        df["molecule_id"] = df["molecule_id"].astype(str)
+    if args.id_col not in df.columns:
+        alternatives = [c for c in ["molecule_id", "compound_id", "chembl_molecule_id", "molecule_chembl_id", "mol_id", "id"] if c in df.columns]
+        avail = ", ".join(map(str, df.columns))
+        hint = f" Try --id_col one of: {', '.join(alternatives)}." if alternatives else ""
+        raise ValueError(f"id column '{args.id_col}' not found. Available columns: {avail}.{hint}")
+    df[args.id_col] = df[args.id_col].astype(str)
     if "_scaffold" not in df.columns:
         df["_scaffold"] = df["canonical_smiles"].astype(str).map(scaffold)
 
@@ -85,12 +90,12 @@ def main() -> None:
 
     for sp in sorted(split_dirs):
         name = sp.name
-        tr_ids = set(read_ids(sp / "train_ids.csv"))
-        va_ids = set(read_ids(sp / "val_ids.csv"))
-        te_ids = set(read_ids(sp / "test_ids.csv"))
-        tr = df[df["molecule_id"].isin(tr_ids)]
-        te = df[df["molecule_id"].isin(te_ids)]
-        va = df[df["molecule_id"].isin(va_ids)]
+        tr_ids = set(read_ids(sp / "train_ids.csv", args.id_col))
+        va_ids = set(read_ids(sp / "val_ids.csv", args.id_col))
+        te_ids = set(read_ids(sp / "test_ids.csv", args.id_col))
+        tr = df[df[args.id_col].isin(tr_ids)]
+        te = df[df[args.id_col].isin(te_ids)]
+        va = df[df[args.id_col].isin(va_ids)]
         size_rows.append({"split": name, "n_train": len(tr), "n_val": len(va), "n_test": len(te)})
         if len(tr) == 0 or len(te) == 0:
             continue

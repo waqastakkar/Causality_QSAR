@@ -266,11 +266,11 @@ def scaffold_matched_props(df: pd.DataFrame, args, base_test: pd.Index) -> tuple
     return {"train": tr, "val": va, "test": base_test}, pd.DataFrame(rows)
 
 
-def save_manifest(split_dir: Path, df: pd.DataFrame, idxs: dict[str, pd.Index], config: dict) -> None:
+def save_manifest(split_dir: Path, df: pd.DataFrame, idxs: dict[str, pd.Index], config: dict, id_col: str) -> None:
     split_dir.mkdir(parents=True, exist_ok=True)
     for part, idx in idxs.items():
         sub = df.loc[idx]
-        sub[["molecule_id"]].to_csv(split_dir / f"{part}_ids.csv", index=False)
+        sub[[id_col]].to_csv(split_dir / f"{part}_ids.csv", index=False)
         sub.to_parquet(split_dir / f"{part}.parquet", index=False)
     (split_dir / "split_config.json").write_text(json.dumps(config, indent=2))
 
@@ -334,6 +334,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--hard_delta", type=float, default=0.3)
     p.add_argument("--activity_threshold", type=float, default=None)
     p.add_argument("--match_props", nargs="+", default=["MW", "LogP", "TPSA", "HBD", "HBA", "RotB", "Rings"])
+    p.add_argument("--id_col", default="molecule_id")
     return p.parse_args()
 
 
@@ -345,14 +346,14 @@ def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
-def normalize_split_inputs(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_split_inputs(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
     out = df.copy()
 
-    id_col = _first_present(out, ["molecule_id", "molecule_chembl_id", "compound_id", "mol_id", "id"])
-    if id_col is None:
-        out["molecule_id"] = out.index.astype(str)
-    elif id_col != "molecule_id":
-        out["molecule_id"] = out[id_col]
+    if id_col not in out.columns:
+        alternatives = [c for c in ["molecule_id", "compound_id", "chembl_molecule_id", "molecule_chembl_id", "mol_id", "id"] if c in out.columns]
+        avail = ", ".join(map(str, out.columns))
+        hint = f" Try --id_col one of: {', '.join(alternatives)}." if alternatives else ""
+        raise ValueError(f"id column '{id_col}' not found. Available columns: {avail}.{hint}")
 
     smiles_col = _first_present(out, ["canonical_smiles", "smiles", "smiles_canonical"])
     if smiles_col is None:
@@ -366,7 +367,7 @@ def normalize_split_inputs(df: pd.DataFrame) -> pd.DataFrame:
         thr = float(out["pIC50"].median())
         out["activity_label"] = (pd.to_numeric(out["pIC50"], errors="coerce") >= thr).astype(int)
 
-    out["molecule_id"] = out["molecule_id"].astype(str)
+    out[id_col] = out[id_col].astype(str)
     return out
 
 
@@ -380,8 +381,8 @@ def main() -> None:
     for d in [out_splits, reports, figures, prov]:
         d.mkdir(parents=True, exist_ok=True)
 
-    df = normalize_split_inputs(pd.read_parquet(args.input_parquet))
-    required = ["molecule_id", "canonical_smiles", "pIC50", "activity_label"]
+    df = normalize_split_inputs(pd.read_parquet(args.input_parquet), args.id_col)
+    required = [args.id_col, "canonical_smiles", "pIC50", "activity_label"]
     miss = [c for c in required if c not in df.columns]
     if miss:
         raise ValueError(f"missing required columns: {miss}")
@@ -422,7 +423,7 @@ def main() -> None:
             continue
 
         split_results[name] = idxs
-        save_manifest(out_splits / name, df, idxs, {"split": name, **vars(args)})
+        save_manifest(out_splits / name, df, idxs, {"split": name, **vars(args)}, args.id_col)
         checks.extend(integrity_checks(name, df, idxs, pub_hold))
         sim_rows.append(similarity_leakage(name, df, idxs, args))
         summary_rows.append({"split": name, "n_train": len(idxs["train"]), "n_val": len(idxs["val"]), "n_test": len(idxs["test"])})
@@ -465,6 +466,8 @@ def main() -> None:
         str(out_splits),
         "--outdir",
         str(root),
+        "--id_col",
+        args.id_col,
     ]
     try:
         subprocess.run(splits_report_cmd, check=True)
