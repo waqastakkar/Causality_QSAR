@@ -138,6 +138,13 @@ def main() -> None:
     split_files.to_csv(outdir / "inputs_snapshot" / "splits_index.csv", index=False)
 
     dataset = pd.read_parquet(args.dataset_parquet)
+    summary_status: dict[str, tuple[str, str]] = {}
+    env_col_effective = args.env_col
+    if env_col_effective not in dataset.columns and env_col_effective == "env_id_manual" and "env_id" in dataset.columns:
+        print("WARNING: env_col 'env_id_manual' not found in dataset; falling back to 'env_id'.")
+        env_col_effective = "env_id"
+    elif env_col_effective not in dataset.columns:
+        print(f"WARNING: env_col '{env_col_effective}' not found in dataset and no fallback available.")
     fp = {
         "dataset_path": args.dataset_parquet,
         "rows": int(len(dataset)),
@@ -156,10 +163,13 @@ def main() -> None:
         pred = ensure_cols(pred, args.label_col)
         pred["split"] = r["split"]
         pred["run_id"] = r["run_id"]
-        if args.env_col not in pred.columns and args.env_col in dataset.columns:
+        if env_col_effective not in pred.columns and env_col_effective == "env_id_manual" and "env_id" in pred.columns:
+            print(f"WARNING: env_col 'env_id_manual' not found in predictions for run {r['run_id']}; falling back to 'env_id'.")
+            env_col_effective = "env_id"
+        if env_col_effective not in pred.columns and env_col_effective in dataset.columns:
             key = "compound_id" if "compound_id" in pred.columns and "compound_id" in dataset.columns else None
             if key:
-                pred = pred.merge(dataset[[key, args.env_col]], on=key, how="left")
+                pred = pred.merge(dataset[[key, env_col_effective]], on=key, how="left")
         pred.to_parquet(outdir / "predictions" / "per_split_predictions" / f"{r['split']}__{r['run_id']}.parquet", index=False)
         merged.append(pred)
 
@@ -178,8 +188,8 @@ def main() -> None:
             ece, _ = expected_calibration_error(clean["y_true"].astype(int), clean["y_pred"])
             cal_split_rows.append({"split": r["split"], "run_id": r["run_id"], "ece": ece})
 
-        if args.env_col in pred.columns:
-            for env, g in pred.dropna(subset=["y_true", "y_pred"]).groupby(args.env_col):
+        if env_col_effective in pred.columns:
+            for env, g in pred.dropna(subset=["y_true", "y_pred"]).groupby(env_col_effective):
                 if len(g) < 5:
                     continue
                 vals = regression_metrics(g["y_true"], g["y_pred"]) if args.task == "regression" else classification_metrics(g["y_true"].astype(int), g["y_pred"])
@@ -231,10 +241,16 @@ def main() -> None:
                         continue
                     vals = regression_metrics(g["y_true"], g["y_pred"]) if args.task == "regression" else classification_metrics(g["y_true"].astype(int), g["y_pred"])
                     cns_metrics.append({"subset": f"mpo_bin={grp}", **vals})
+        summary_status["cns_subset_metrics"] = ("RAN", "computed from bbb_parquet")
+    else:
+        reason = "bbb_parquet missing/unreadable" if not args.bbb_parquet or not Path(args.bbb_parquet).exists() else "no merged predictions"
+        print(f"WARNING: CNS subset metrics skipped ({reason}).")
+        cns_metrics = [{"status": "SKIPPED", "reason": reason}]
+        summary_status["cns_subset_metrics"] = ("SKIPPED", reason)
     pd.DataFrame(cns_metrics).to_csv(outdir / "reports" / "cns_subset_metrics.csv", index=False)
 
     envprobe_rows = []
-    if args.compute_envprobe and args.env_col in merged_df.columns:
+    if args.compute_envprobe and env_col_effective in merged_df.columns:
         zinv_cols = [c for c in merged_df.columns if c.startswith("z_inv")]
         zspu_cols = [c for c in merged_df.columns if c.startswith("z_spu")]
         h_cols = [c for c in merged_df.columns if c.startswith("h_")]
@@ -245,26 +261,40 @@ def main() -> None:
             if not cols:
                 envprobe_rows.append({"embedding": label, "accuracy": np.nan, "n_features": 0})
                 continue
-            probe_df = merged_df.dropna(subset=cols + [args.env_col]).copy()
-            if probe_df.empty or probe_df[args.env_col].nunique() < 2:
+            probe_df = merged_df.dropna(subset=cols + [env_col_effective]).copy()
+            if probe_df.empty or probe_df[env_col_effective].nunique() < 2:
                 envprobe_rows.append({"embedding": label, "accuracy": np.nan, "n_features": len(cols)})
                 continue
-            X_train, X_test, y_train, y_test = train_test_split(probe_df[cols].values, probe_df[args.env_col].values, test_size=0.25, random_state=42, stratify=probe_df[args.env_col].values)
+            X_train, X_test, y_train, y_test = train_test_split(probe_df[cols].values, probe_df[env_col_effective].values, test_size=0.25, random_state=42, stratify=probe_df[env_col_effective].values)
             clf = LogisticRegression(max_iter=1000)
             clf.fit(X_train, y_train)
             envprobe_rows.append({"embedding": label, "accuracy": float(clf.score(X_test, y_test)), "n_features": len(cols)})
+        summary_status["causal_sanity_envprobe"] = ("RAN", "computed")
+    elif not args.compute_envprobe:
+        summary_status["causal_sanity_envprobe"] = ("SKIPPED", "flag --compute_envprobe not set")
+    else:
+        reason = f"environment column '{env_col_effective}' unavailable"
+        print(f"WARNING: Envprobe skipped ({reason}).")
+        summary_status["causal_sanity_envprobe"] = ("SKIPPED", reason)
     pd.DataFrame(envprobe_rows).to_csv(outdir / "reports" / "causal_sanity_envprobe.csv", index=False)
 
     zinv_rows = []
     if args.compute_zinv_stability:
         zinv_cols = [c for c in merged_df.columns if c.startswith("z_inv")]
-        if zinv_cols and args.env_col in merged_df.columns:
-            for env, g in merged_df.dropna(subset=zinv_cols + [args.env_col]).groupby(args.env_col):
+        if zinv_cols and env_col_effective in merged_df.columns:
+            for env, g in merged_df.dropna(subset=zinv_cols + [env_col_effective]).groupby(env_col_effective):
                 mean_vec = g[zinv_cols].mean().values
                 zinv_rows.append({"env": env, "n": len(g), "mean_norm": float(np.linalg.norm(mean_vec)), "within_var": float(g[zinv_cols].var().mean())})
+            summary_status["zinv_stability"] = ("RAN", "computed")
+        else:
+            reason = "missing z_inv features or environment column"
+            print(f"WARNING: z_inv stability skipped ({reason}).")
+            summary_status["zinv_stability"] = ("SKIPPED", reason)
         between = float(pd.DataFrame(zinv_rows)["mean_norm"].var()) if zinv_rows else np.nan
         for r in zinv_rows:
             r["between_env_var_mean_norm"] = between
+    else:
+        summary_status["zinv_stability"] = ("SKIPPED", "flag --compute_zinv_stability not set")
     pd.DataFrame(zinv_rows).to_csv(outdir / "reports" / "zinv_stability.csv", index=False)
 
     cf_rows = []
@@ -276,6 +306,14 @@ def main() -> None:
                     frac_pos = float((g["delta_yhat"] > 0).mean())
                     std = float(g["delta_yhat"].std()) if len(g) > 1 else 0.0
                     cf_rows.append({"run_id": p.parent.parent.name, "rule_id": rid, "fraction_positive": frac_pos, "delta_std": std, "invariance_score": frac_pos - 0.1 * std})
+        summary_status["counterfactual_consistency"] = ("RAN", "computed")
+    elif not args.compute_cf_consistency:
+        summary_status["counterfactual_consistency"] = ("SKIPPED", "flag --compute_cf_consistency not set")
+    else:
+        reason = "counterfactuals_root missing/unreadable"
+        print(f"WARNING: Counterfactual consistency skipped ({reason}).")
+        cf_rows = [{"status": "SKIPPED", "reason": reason}]
+        summary_status["counterfactual_consistency"] = ("SKIPPED", reason)
     pd.DataFrame(cf_rows).to_csv(outdir / "reports" / "counterfactual_consistency.csv", index=False)
 
     pd.DataFrame(columns=["test", "effect_size", "p_value", "p_adjusted"]).to_csv(outdir / "reports" / "statistical_tests.csv", index=False)
@@ -308,6 +346,12 @@ def main() -> None:
         if not cal.empty:
             ax.plot(cal["conf"], cal["acc"], marker="o")
         ax.plot([0, 1], [0, 1], "--", color="gray")
+        summary_status["fig_calibration_reliability"] = ("RAN", "classification reliability diagram")
+    else:
+        reason = "task is regression" if args.task == "regression" else "no merged predictions"
+        print(f"WARNING: fig_calibration_reliability skipped ({reason}).")
+        ax.text(0.5, 0.5, f"SKIPPED: {reason}", ha="center", va="center", transform=ax.transAxes)
+        summary_status["fig_calibration_reliability"] = ("SKIPPED", reason)
     style_axis(ax, style, "Calibration Reliability", "Confidence", "Accuracy")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_calibration_reliability.svg"); plt.close(fig)
 
@@ -391,6 +435,17 @@ def main() -> None:
     }
     (outdir / "provenance" / "provenance.json").write_text(json.dumps(prov, indent=2), encoding="utf-8")
     (outdir / "provenance" / "environment.txt").write_text(subprocess.getoutput("python -m pip freeze") + "\n", encoding="utf-8")
+
+    print("\n=== Step 8 analysis summary ===")
+    for name in [
+        "cns_subset_metrics",
+        "causal_sanity_envprobe",
+        "zinv_stability",
+        "counterfactual_consistency",
+        "fig_calibration_reliability",
+    ]:
+        status, reason = summary_status.get(name, ("SKIPPED", "not evaluated"))
+        print(f" - {name}: {status} ({reason})")
 
 
 if __name__ == "__main__":
