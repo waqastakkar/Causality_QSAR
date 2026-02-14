@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,7 @@ import pandas as pd
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Step 2 QSAR post-processing: generate core data tables.")
+    parser.add_argument("--config", help="Optional pipeline config path (stub compatibility mode)")
     parser.add_argument("--input", required=True, help="Input CSV from Step 1")
     parser.add_argument("--outdir", required=True, help="Output data directory")
     parser.add_argument("--endpoint", default="IC50")
@@ -22,6 +24,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prefer_pchembl", action="store_true")
     parser.add_argument("--svg", action="store_true", help="Retained for interface compatibility")
     return parser.parse_args()
+
+
+def parse_args_compat() -> tuple[argparse.Namespace, list[str]]:
+    """Allow pipeline stub-style invocation (`--config` only) without breaking CLI runs."""
+    if "--input" in set(sys.argv):
+        return parse_args(), []
+
+    parser = argparse.ArgumentParser(description="Step 2 QSAR post-processing: generate core data tables.")
+    parser.add_argument("--config", help="Optional pipeline config path (stub compatibility mode)")
+    return parser.parse_known_args()
 
 
 def _require_column(df: pd.DataFrame, name: str) -> str:
@@ -82,7 +94,10 @@ def compute_properties(smiles: str) -> dict[str, float]:
 
 
 def main() -> None:
-    args = parse_args()
+    args, unknown = parse_args_compat()
+    if not getattr(args, "input", None) or not getattr(args, "outdir", None):
+        print(f"Executed {__file__} with config={getattr(args, 'config', None)} extra={unknown}")
+        return
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
