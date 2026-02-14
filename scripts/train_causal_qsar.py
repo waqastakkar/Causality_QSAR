@@ -187,7 +187,8 @@ def parse_args():
 def main():
     args = parse_args()
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    cfg = TrainConfig(**vars(args), run_id=run_id)
+    args.run_id = run_id
+    cfg = TrainConfig(**vars(args))
     seed_everything(cfg.seed)
 
     run_root = Path(cfg.outdir) / cfg.target / cfg.split_name / cfg.run_id
