@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -114,6 +115,7 @@ def main() -> None:
     args = parse_args()
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     row_df = pd.read_csv(args.row_level_csv)
     comp_df = pd.read_csv(args.compound_level_csv)
@@ -183,11 +185,20 @@ def main() -> None:
         if k not in comp_df.columns:
             comp_df[k] = "unknown"
     comp_df["env_id"] = comp_df[env_keys].astype(str).agg("|".join, axis=1)
+    try:
+        comp_df["env_id_manual"] = comp_df[env_keys].astype(str).agg("|".join, axis=1)
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        comp_df["env_id_manual"] = comp_df["env_id"]
+        logging.warning("Could not create env_id_manual from env keys, falling back to env_id (%s)", exc)
+
+    if comp_df["env_id_manual"].isna().any():
+        logging.warning("env_id_manual contains missing values; filling missing entries from env_id")
+        comp_df["env_id_manual"] = comp_df["env_id_manual"].fillna(comp_df["env_id"])
 
     row_id_col = pick_col(row_df, ["molecule_chembl_id", "compound_id", "molecule_id", "mol_id"])
     if row_id_col is None:
         row_id_col = id_col
-    attach_cols = [id_col, "env_id", *env_keys, "scaffold_id"]
+    attach_cols = [id_col, "env_id_manual", "env_id", *env_keys, "scaffold_id"]
     attach_cols = [c for c in attach_cols if c in comp_df.columns]
     merged_row = row_df.merge(comp_df[attach_cols].drop_duplicates(id_col), left_on=row_id_col, right_on=id_col, how="left")
 
