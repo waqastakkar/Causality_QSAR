@@ -6,6 +6,7 @@ import hashlib
 import json
 import platform
 import subprocess
+import sys
 import warnings
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -113,35 +114,29 @@ def main() -> None:
             )
         return filtered_rows
 
-    support_attempts = [10] if args.min_support <= 3 else [args.min_support]
-    if args.min_support not in support_attempts:
-        support_attempts.append(args.min_support)
-
-    rows = []
-    effective_min_support = support_attempts[0]
+    rows = build_rows(args.min_support)
+    n_rules_raw = len(counter)
+    n_rules_after_min_support = len(rows)
+    effective_min_support = args.min_support
     fallback_applied = False
     fallback_message = ""
-    for i, support_threshold in enumerate(support_attempts):
-        rows = build_rows(support_threshold)
-        effective_min_support = support_threshold
-        if rows or i == len(support_attempts) - 1:
-            break
-
-    if not rows and effective_min_support > 3:
-        # Safety net for sparse/diverse datasets when caller chooses a high threshold.
+    if n_rules_after_min_support == 0 and args.min_support != 3:
         fallback_applied = True
         effective_min_support = 3
         fallback_message = (
-            f"No rules found with min_support={args.min_support}; automatically rebuilt with min_support=3."
+            f"No rules found with min_support={args.min_support}; automatically retrying with min_support=3."
         )
         warnings.warn(fallback_message)
         rows = build_rows(effective_min_support)
-    elif effective_min_support != args.min_support:
-        fallback_applied = True
-        fallback_message = (
-            f"No rules found with min_support={support_attempts[0]}; automatically rebuilt with min_support={effective_min_support}."
-        )
-        warnings.warn(fallback_message)
+        n_rules_after_min_support = len(rows)
+
+    print(
+        "Rule extraction counts: "
+        f"n_rules_raw={n_rules_raw}, "
+        f"n_rules_after_min_support={n_rules_after_min_support}, "
+        f"min_support_used={effective_min_support}",
+        file=sys.stderr,
+    )
     rules_df = pd.DataFrame(rows).sort_values("support_count", ascending=False) if rows else pd.DataFrame(columns=[
         "rule_id", "lhs_fragment", "rhs_fragment", "context_fragment", "transformation", "support_count", "median_delta_pIC50", "series_scope"
     ])
@@ -158,7 +153,10 @@ def main() -> None:
                 "n_unique_smiles",
                 "n_rules_before_filter",
                 "n_rules_after_filter",
+                "n_rules_raw",
+                "n_rules_after_min_support",
                 "requested_min_support",
+                "min_support_used",
                 "effective_min_support",
                 "fallback_applied",
                 "fallback_note",
@@ -167,9 +165,12 @@ def main() -> None:
             "value": [
                 len(df),
                 df[smi_col].nunique(),
-                len(counter),
+                n_rules_raw,
                 len(rules_df),
+                n_rules_raw,
+                n_rules_after_min_support,
                 args.min_support,
+                effective_min_support,
                 effective_min_support,
                 int(fallback_applied),
                 fallback_message or "none",
@@ -183,15 +184,23 @@ def main() -> None:
     configure_matplotlib(style, svg=True)
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig_path = fig_dir / "fig_edit_type_distribution.svg"
     top = rules_df.head(15).copy()
-    if not top.empty:
+    if top.empty:
+        fig, ax = plt.subplots(figsize=(4, 2.4))
+        ax.axis("off")
+        ax.text(0.5, 0.5, "NO DATA (0 rows)", ha="center", va="center", fontsize=14, fontweight="bold")
+        fig.tight_layout()
+        fig.savefig(fig_path)
+        plt.close(fig)
+    else:
+        fig, ax = plt.subplots(figsize=(7, 4))
         top["rule_label"] = top["lhs_fragment"].str.slice(0, 12) + "→" + top["rhs_fragment"].str.slice(0, 12)
         ax.barh(top["rule_label"], top["support_count"])
-    style_axis(ax, style, title="Edit Type Distribution", xlabel="Support count", ylabel="Rule")
-    fig.tight_layout()
-    fig.savefig(fig_dir / "fig_edit_type_distribution.svg")
-    plt.close(fig)
+        style_axis(ax, style, title="Edit Type Distribution", xlabel="Support count", ylabel="Rule")
+        fig.tight_layout()
+        fig.savefig(fig_path)
+        plt.close(fig)
 
     provenance = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
