@@ -301,6 +301,7 @@ ptp1bqsar manuscript --config configs/ptp1b.yaml --paper_id hfintl_ptp1b_v1
 | Symptom | Likely cause | Suggested fix |
 |---|---|---|
 | `RDKit import failed` during `check` | RDKit not installed in active env | Recreate env from `environment.yml`; ensure `conda-forge` channel is available |
+| `ModuleNotFoundError: No module named 'torch_geometric'` | PyG dependency missing in active env | Install dependencies from `environment.yml` (or `pip install -r requirements.txt`), then re-run Step 5+ |
 | Missing script error for a step | Incomplete checkout or path issue | Confirm repository integrity and run from repo root |
 | `Required path does not exist` warnings | Dataset paths not prepared | Create folders/data files referenced by config |
 | CUDA unavailable | GPU runtime package mismatch | Use `pytorch-cuda` version compatible with your driver per `environment.yml` comments |

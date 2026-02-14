@@ -61,3 +61,4 @@ dependencies:
       - ruff>=0.3
       - wandb>=0.16  # optional experiment tracking
       - einops>=0.7  # optional utility for transformer-style modules
+      - torch-geometric>=2.5  # required by GNN training/evaluation scripts
