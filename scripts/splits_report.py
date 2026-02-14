@@ -14,7 +14,10 @@ try:
 except Exception as exc:  # pragma: no cover
     raise RuntimeError("RDKit is required for splits_report.py") from exc
 
-from scripts.plot_style import PlotStyle, configure_matplotlib, style_axis
+try:
+    from scripts.plot_style import PlotStyle, configure_matplotlib, style_axis
+except ModuleNotFoundError:
+    from plot_style import PlotStyle, configure_matplotlib, style_axis
 
 
 def parse_args() -> argparse.Namespace:
