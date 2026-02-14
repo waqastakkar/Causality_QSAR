@@ -70,15 +70,15 @@ def pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
 
 def ensure_molecule_id(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    source_col = pick_col(out, ["molecule_id", "compound_id", "chembl_molecule_id", "mol_id", "id"])
+    source_col = pick_col(out, ["molecule_id", "molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"])
     if source_col is None:
         raise ValueError(
             "Could not determine primary key for compound-level data. "
-            "Expected one of: molecule_id, compound_id, chembl_molecule_id, mol_id, id"
+            "Expected one of: molecule_id, molecule_chembl_id, chembl_molecule_id, compound_id, mol_id, id"
         )
     if source_col != "molecule_id":
         logging.warning("Creating canonical molecule_id from source column '%s'", source_col)
-        out["molecule_id"] = out[source_col]
+    out["molecule_id"] = out[source_col]
 
     out["molecule_id"] = out["molecule_id"].astype(str)
     dup_count = int(out["molecule_id"].duplicated(keep=False).sum())

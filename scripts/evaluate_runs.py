@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import platform
 import subprocess
 from datetime import datetime, timezone
@@ -107,6 +108,30 @@ def ensure_cols(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
     return out
 
 
+
+
+def canonicalize_molecule_id(df: pd.DataFrame, context: str) -> pd.DataFrame:
+    out = df.copy()
+    if "molecule_id" in out.columns:
+        out["molecule_id"] = out["molecule_id"].astype(str)
+        return out
+
+    for col in ["molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"]:
+        if col in out.columns:
+            logging.warning("%s: creating canonical molecule_id from source column '%s'", context, col)
+            out["molecule_id"] = out[col].astype(str)
+            return out
+
+    logging.warning("%s: no molecule identifier columns found", context)
+    return out
+
+
+def resolve_join_key(left: pd.DataFrame, right: pd.DataFrame) -> str | None:
+    for key in ["molecule_id", "molecule_chembl_id", "chembl_molecule_id", "compound_id"]:
+        if key in left.columns and key in right.columns:
+            return key
+    return None
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 8 evaluation suite")
     parser.add_argument("--target", required=True)
@@ -128,6 +153,7 @@ def main() -> None:
     if np is None or pd is None:
         raise SystemExit("numpy and pandas are required to run evaluate_runs.py")
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     outdir = Path(args.outdir)
     for sub in ["inputs_snapshot", "predictions/per_split_predictions", "reports", "figures", "provenance"]:
         (outdir / sub).mkdir(parents=True, exist_ok=True)
@@ -137,7 +163,7 @@ def main() -> None:
     split_files = pd.DataFrame({"file": [str(p) for p in sorted(Path(args.splits_dir).glob("*.csv"))]})
     split_files.to_csv(outdir / "inputs_snapshot" / "splits_index.csv", index=False)
 
-    dataset = pd.read_parquet(args.dataset_parquet)
+    dataset = canonicalize_molecule_id(pd.read_parquet(args.dataset_parquet), "dataset")
     summary_status: dict[str, tuple[str, str]] = {}
     env_col_effective = args.env_col
     if env_col_effective not in dataset.columns and env_col_effective == "env_id_manual" and "env_id" in dataset.columns:
@@ -159,7 +185,7 @@ def main() -> None:
     perf_env_rows = []
     cal_split_rows = []
     for _, r in runs.iterrows():
-        pred = pd.read_parquet(r["pred_path"])
+        pred = canonicalize_molecule_id(pd.read_parquet(r["pred_path"]), f"predictions run {r['run_id']}")
         pred = ensure_cols(pred, args.label_col)
         pred["split"] = r["split"]
         pred["run_id"] = r["run_id"]
@@ -167,9 +193,11 @@ def main() -> None:
             print(f"WARNING: env_col 'env_id_manual' not found in predictions for run {r['run_id']}; falling back to 'env_id'.")
             env_col_effective = "env_id"
         if env_col_effective not in pred.columns and env_col_effective in dataset.columns:
-            key = "compound_id" if "compound_id" in pred.columns and "compound_id" in dataset.columns else None
+            key = resolve_join_key(pred, dataset)
             if key:
                 pred = pred.merge(dataset[[key, env_col_effective]], on=key, how="left")
+            else:
+                logging.warning("Could not backfill env column for run %s: no shared identifier column", r["run_id"])
         pred.to_parquet(outdir / "predictions" / "per_split_predictions" / f"{r['split']}__{r['run_id']}.parquet", index=False)
         merged.append(pred)
 
@@ -224,8 +252,8 @@ def main() -> None:
 
     cns_metrics = []
     if args.bbb_parquet and Path(args.bbb_parquet).exists() and not merged_df.empty:
-        bbb = pd.read_parquet(args.bbb_parquet)
-        key = "compound_id" if "compound_id" in bbb.columns and "compound_id" in merged_df.columns else None
+        bbb = canonicalize_molecule_id(pd.read_parquet(args.bbb_parquet), "bbb_parquet")
+        key = resolve_join_key(merged_df, bbb)
         if key:
             joined = merged_df.merge(bbb, on=key, how="left")
             cns_col = "cns_like" if "cns_like" in joined.columns else None
