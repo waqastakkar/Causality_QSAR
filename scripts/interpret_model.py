@@ -185,13 +185,25 @@ def main() -> None:
 
     df = pd.read_parquet(args.dataset_parquet)
     smiles_col = _pick_col(df, ["smiles", "canonical_smiles"])
-    mol_col = _pick_col(df, ["molecule_id", "compound_id", "mol_id"])
+    mol_col = _pick_col(
+        df,
+        [
+            "molecule_id",
+            "molecule_chembl_id",
+            "compound_id",
+            "mol_id",
+            "id",
+        ],
+        required=False,
+    )
     series_col = _pick_col(df, ["series_id"], required=False)
     if series_col is None:
         df["series_id"] = "series_unknown"
     if smiles_col != "smiles":
         df = df.rename(columns={smiles_col: "smiles"})
-    if mol_col != "molecule_id":
+    if mol_col is None:
+        df["molecule_id"] = df.index.astype(str)
+    elif mol_col != "molecule_id":
         df = df.rename(columns={mol_col: "molecule_id"})
 
     preds = _load_predictions(run_dir)
