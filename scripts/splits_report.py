@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -46,9 +47,13 @@ def read_ids(path: Path, id_col: str) -> list:
     if not path.exists():
         return []
     ids = pd.read_csv(path)
-    if id_col not in ids.columns:
+    if id_col in ids.columns:
+        return ids[id_col].astype(str).tolist()
+    fallback_col = next((c for c in ["molecule_id", "molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"] if c in ids.columns), None)
+    if fallback_col is None:
         return []
-    return ids[id_col].astype(str).tolist()
+    logging.warning("Split ID file %s missing column '%s'; using '%s'", path.name, id_col, fallback_col)
+    return ids[fallback_col].astype(str).tolist()
 
 
 def scaffold(smiles: str) -> str:
@@ -72,13 +77,27 @@ def main() -> None:
     reports.mkdir(parents=True, exist_ok=True)
     figures.mkdir(parents=True, exist_ok=True)
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     df = pd.read_parquet(args.input_parquet)
+    canonical_id = "molecule_id"
+    if canonical_id not in df.columns:
+        fallback_col = next((c for c in ["molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"] if c in df.columns), None)
+        if fallback_col is not None:
+            logging.warning("Creating canonical molecule_id from source column '%s'", fallback_col)
+            df[canonical_id] = df[fallback_col]
+
     if args.id_col not in df.columns:
-        alternatives = [c for c in ["molecule_id", "compound_id", "chembl_molecule_id", "molecule_chembl_id", "mol_id", "id"] if c in df.columns]
+        alternatives = [c for c in ["molecule_id", "molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"] if c in df.columns]
         avail = ", ".join(map(str, df.columns))
         hint = f" Try --id_col one of: {', '.join(alternatives)}." if alternatives else ""
         raise ValueError(f"id column '{args.id_col}' not found. Available columns: {avail}.{hint}")
+
+    if args.id_col != canonical_id:
+        logging.warning("Using id_col '%s'; also standardizing canonical molecule_id from this column", args.id_col)
+        df[canonical_id] = df[args.id_col]
+
     df[args.id_col] = df[args.id_col].astype(str)
+    df[canonical_id] = df[canonical_id].astype(str)
     if "_scaffold" not in df.columns:
         df["_scaffold"] = df["canonical_smiles"].astype(str).map(scaffold)
 

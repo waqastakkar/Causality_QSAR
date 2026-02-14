@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import platform
 import subprocess
 import sys
@@ -348,12 +349,23 @@ def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
 
 def normalize_split_inputs(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
     out = df.copy()
+    canonical_id = "molecule_id"
+
+    if canonical_id not in out.columns:
+        fallback_col = _first_present(out, ["molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"])
+        if fallback_col is not None:
+            logging.warning("Creating canonical molecule_id from source column '%s'", fallback_col)
+            out[canonical_id] = out[fallback_col]
 
     if id_col not in out.columns:
-        alternatives = [c for c in ["molecule_id", "compound_id", "chembl_molecule_id", "molecule_chembl_id", "mol_id", "id"] if c in out.columns]
+        alternatives = [c for c in ["molecule_id", "molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"] if c in out.columns]
         avail = ", ".join(map(str, out.columns))
         hint = f" Try --id_col one of: {', '.join(alternatives)}." if alternatives else ""
         raise ValueError(f"id column '{id_col}' not found. Available columns: {avail}.{hint}")
+
+    if id_col != canonical_id:
+        logging.warning("Using id_col '%s'; also standardizing canonical molecule_id from this column", id_col)
+        out[canonical_id] = out[id_col]
 
     smiles_col = _first_present(out, ["canonical_smiles", "smiles", "smiles_canonical"])
     if smiles_col is None:
@@ -368,11 +380,13 @@ def normalize_split_inputs(df: pd.DataFrame, id_col: str) -> pd.DataFrame:
         out["activity_label"] = (pd.to_numeric(out["pIC50"], errors="coerce") >= thr).astype(int)
 
     out[id_col] = out[id_col].astype(str)
+    out[canonical_id] = out[canonical_id].astype(str)
     return out
 
 
 def main() -> None:
     args = parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     out_splits = Path(args.outdir)
     root = out_splits.parent
     reports = root / "reports"

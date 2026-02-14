@@ -197,11 +197,14 @@ def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
 def normalize_training_inputs(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    id_col = _first_present(out, ["molecule_id", "molecule_chembl_id", "compound_id", "mol_id", "id"])
+    id_col = _first_present(out, ["molecule_id", "molecule_chembl_id", "chembl_molecule_id", "compound_id", "mol_id", "id"])
     if id_col is None:
+        logging.warning("No molecule identifier column found; creating molecule_id from dataframe index")
         out["molecule_id"] = out.index.astype(str)
     elif id_col != "molecule_id":
+        logging.warning("Creating canonical molecule_id from source column '%s'", id_col)
         out["molecule_id"] = out[id_col]
+    out["molecule_id"] = out["molecule_id"].astype(str)
 
     smiles_col = _first_present(out, ["smiles", "canonical_smiles", "smiles_canonical"])
     if smiles_col is None:
