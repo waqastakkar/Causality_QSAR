@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -63,6 +64,41 @@ def scaffold(smiles: str) -> str:
     return MurckoScaffold.MurckoScaffoldSmiles(mol=mol) or "NOSCAF"
 
 
+def resolve_property_columns(columns: list[str]) -> dict[str, str]:
+    alias_map = {
+        "MW": ["mw", "molecularweight", "molecular_weight", "molweight", "exactmw", "exact_mw", "amw"],
+        "logP": ["logp", "xlogp", "alogp", "clogp", "mol_logp", "mollogp"],
+        "TPSA": ["tpsa", "topologicalpolar", "topological_polar_surface_area", "polar_surface_area", "psa"],
+        "HBD": ["hbd", "h_donors", "hbonddonors", "numhdonors", "hbond_donors"],
+        "HBA": ["hba", "h_acceptors", "hbondacceptors", "numhacceptors", "hbond_acceptors"],
+        "RB": ["rb", "rotb", "rotatablebonds", "nrotb", "numrotatablebonds", "rotatable_bonds"],
+    }
+
+    def norm(s: str) -> str:
+        return "".join(ch for ch in s.lower() if ch.isalnum())
+
+    normalized = {norm(c): c for c in columns}
+    resolved: dict[str, str] = {}
+    for canonical, aliases in alias_map.items():
+        for alias in aliases:
+            if alias in normalized:
+                resolved[canonical] = normalized[alias]
+                break
+    return resolved
+
+
+def write_skip_panel(fig_path: Path, message: str, title: str):
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9, 2.6))
+    ax.axis("off")
+    ax.text(0.02, 0.72, title, fontsize=14, fontweight="bold", ha="left", va="center", transform=ax.transAxes)
+    ax.text(0.02, 0.35, message, fontsize=12, ha="left", va="center", transform=ax.transAxes)
+    fig.tight_layout()
+    fig.savefig(fig_path)
+    plt.close(fig)
+
+
 def main() -> None:
     args = parse_args()
     import matplotlib.pyplot as plt
@@ -104,8 +140,20 @@ def main() -> None:
     split_dirs = [p for p in Path(args.splits_dir).iterdir() if p.is_dir()]
     label_rows, cov_rows, scaf_rows, env_rows, sim_rows, time_rows, size_rows = [], [], [], [], [], [], []
 
-    props = ["MW", "LogP", "TPSA", "HBD", "HBA", "RotB", "Rings"]
+    prop_cols = resolve_property_columns(df.columns.tolist())
     env_col = "env_id_manual" if "env_id_manual" in df.columns else ("assay_type" if "assay_type" in df.columns else None)
+
+    run_cfg_path = outdir / "provenance" / "run_config.json"
+    time_key = "publication_year"
+    if run_cfg_path.exists():
+        try:
+            run_cfg = json.loads(run_cfg_path.read_text())
+            time_key = run_cfg.get("time_key", time_key)
+        except Exception as exc:
+            logging.warning("Unable to parse %s (%s); defaulting time_key='%s'", run_cfg_path, exc, time_key)
+
+    split_names = [p.name for p in split_dirs]
+    time_split_enabled = any("time" in s.lower() for s in split_names)
 
     for sp in sorted(split_dirs):
         name = sp.name
@@ -128,12 +176,12 @@ def main() -> None:
             "train_active_rate": tr["activity_label"].mean(),
             "test_active_rate": te["activity_label"].mean(),
         })
-        for p in props:
-            if p in tr.columns and p in te.columns:
-                tv = tr[p].dropna().to_numpy()
-                qv = te[p].dropna().to_numpy()
+        for prop_name, prop_col in prop_cols.items():
+            if prop_col in tr.columns and prop_col in te.columns:
+                tv = tr[prop_col].dropna().to_numpy()
+                qv = te[prop_col].dropna().to_numpy()
                 if len(tv) and len(qv):
-                    cov_rows.append({"split": name, "property": p, "ks_stat": ks_2samp(tv, qv).statistic, "wasserstein": wasserstein_distance(tv, qv)})
+                    cov_rows.append({"split": name, "property": prop_name, "source_column": prop_col, "ks_stat": ks_2samp(tv, qv).statistic, "wasserstein": wasserstein_distance(tv, qv)})
 
         tr_scaf = set(tr["_scaffold"].astype(str))
         te_scaf = set(te["_scaffold"].astype(str))
@@ -156,8 +204,8 @@ def main() -> None:
         arr = np.array(max_sims) if max_sims else np.array([0.0])
         sim_rows.append({"split": name, "n_test_scored": len(max_sims), "sim_min": np.min(arr), "sim_median": np.median(arr), "sim_max": np.max(arr), "count_ge_0.8": int((arr >= 0.8).sum()), "count_ge_0.85": int((arr >= 0.85).sum()), "count_ge_0.9": int((arr >= 0.9).sum())})
 
-        if "publication_year" in df.columns:
-            time_rows.append({"split": name, "train_year_min": tr["publication_year"].min(), "train_year_max": tr["publication_year"].max(), "test_year_min": te["publication_year"].min(), "test_year_max": te["publication_year"].max()})
+        if time_key in df.columns:
+            time_rows.append({"split": name, "train_year_min": tr[time_key].min(), "train_year_max": tr[time_key].max(), "test_year_min": te[time_key].min(), "test_year_max": te[time_key].max()})
 
     label_df = pd.DataFrame(label_rows)
     cov_df = pd.DataFrame(cov_rows)
@@ -180,6 +228,7 @@ def main() -> None:
         pd.DataFrame().to_csv(reports / "matching_quality.csv", index=False)
 
     pal = list(style.palette)
+    plot_status = []
 
     if not size_df.empty:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -192,6 +241,10 @@ def main() -> None:
         ax.legend()
         style_axis(ax, style, "Split sizes", "Split", "Count")
         fig.tight_layout(); fig.savefig(figures / "fig_split_sizes.svg"); plt.close(fig)
+        plot_status.append({"plot": "fig_split_sizes.svg", "status": "CREATED", "reason": "ok"})
+    else:
+        write_skip_panel(figures / "fig_split_sizes.svg", "SKIPPED: no split size rows", "Split sizes")
+        plot_status.append({"plot": "fig_split_sizes.svg", "status": "SKIPPED", "reason": "SKIPPED: no split size rows"})
 
     if not label_df.empty:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -201,8 +254,17 @@ def main() -> None:
         ax.set_xticks(x); ax.set_xticklabels(label_df["split"], rotation=45, ha="right")
         ax.legend(); style_axis(ax, style, "Label shift by split", "Split", "Mean pIC50")
         fig.tight_layout(); fig.savefig(figures / "fig_label_shift_by_split.svg"); plt.close(fig)
+        plot_status.append({"plot": "fig_label_shift_by_split.svg", "status": "CREATED", "reason": "ok"})
+    else:
+        write_skip_panel(figures / "fig_label_shift_by_split.svg", "SKIPPED: no label-shift rows", "Label shift by split")
+        plot_status.append({"plot": "fig_label_shift_by_split.svg", "status": "SKIPPED", "reason": "SKIPPED: no label-shift rows"})
 
-    if not cov_df.empty:
+    cov_skip_reason = None
+    if not prop_cols:
+        cov_skip_reason = "SKIPPED: no property columns found"
+        logging.warning("Covariate shift plot skipped: no property columns found")
+
+    if not cov_df.empty and cov_skip_reason is None:
         pivot = cov_df.pivot_table(index="split", columns="property", values="ks_stat", aggfunc="mean").fillna(0)
         fig, ax = plt.subplots(figsize=(9, 5))
         im = ax.imshow(pivot.values, aspect="auto", cmap="viridis")
@@ -211,8 +273,11 @@ def main() -> None:
         style_axis(ax, style, "Covariate shift (KS)", "Property", "Split")
         fig.colorbar(im, ax=ax)
         fig.tight_layout(); fig.savefig(figures / "fig_covariate_shift_props.svg"); plt.close(fig)
+        plot_status.append({"plot": "fig_covariate_shift_props.svg", "status": "CREATED", "reason": "ok"})
     else:
-        (figures / "fig_covariate_shift_props.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">No covariate-shift data</text></svg>')
+        reason = cov_skip_reason or "SKIPPED: no covariate-shift data"
+        write_skip_panel(figures / "fig_covariate_shift_props.svg", reason, "Covariate shift")
+        plot_status.append({"plot": "fig_covariate_shift_props.svg", "status": "SKIPPED", "reason": reason})
 
     for fname, dff, y, title in [
         ("fig_scaffold_overlap_by_split.svg", scaf_df, "overlap_fraction_test", "Scaffold overlap by split"),
@@ -225,19 +290,31 @@ def main() -> None:
             ax.set_xticklabels(dff["split"], rotation=45, ha="right")
             style_axis(ax, style, title, "Split", y)
             fig.tight_layout(); fig.savefig(figures / fname); plt.close(fig)
+            plot_status.append({"plot": fname, "status": "CREATED", "reason": "ok"})
         else:
             (figures / fname).write_text('<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">No data</text></svg>')
+            plot_status.append({"plot": fname, "status": "SKIPPED", "reason": "SKIPPED: no data"})
 
-    if not time_df.empty:
+    time_skip_reason = None
+    if not time_split_enabled or time_key not in df.columns:
+        time_skip_reason = f"SKIPPED: time split not enabled or missing date column {time_key}"
+        logging.warning("Time split timeline skipped: time split not enabled or missing date column '%s'", time_key)
+
+    if not time_df.empty and time_skip_reason is None:
         fig, ax = plt.subplots(figsize=(8, 5))
         for i, row in time_df.reset_index(drop=True).iterrows():
             ax.hlines(i, row["train_year_min"], row["train_year_max"], color=pal[0], linewidth=5, label="train" if i == 0 else "")
             ax.hlines(i, row["test_year_min"], row["test_year_max"], color=pal[3], linewidth=5, label="test" if i == 0 else "")
         ax.set_yticks(range(len(time_df))); ax.set_yticklabels(time_df["split"])
-        ax.legend(); style_axis(ax, style, "Time split timeline", "Publication year", "Split")
+        ax.legend(); style_axis(ax, style, "Time split timeline", time_key, "Split")
         fig.tight_layout(); fig.savefig(figures / "fig_time_split_timeline.svg"); plt.close(fig)
+        plot_status.append({"plot": "fig_time_split_timeline.svg", "status": "CREATED", "reason": "ok"})
     else:
-        (figures / "fig_time_split_timeline.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">No year data</text></svg>')
+        reason = time_skip_reason or f"SKIPPED: time split not enabled or missing date column {time_key}"
+        if time_skip_reason is None:
+            logging.warning("Time split timeline skipped: no timeline rows available for date column '%s'", time_key)
+        write_skip_panel(figures / "fig_time_split_timeline.svg", reason, "Time split timeline")
+        plot_status.append({"plot": "fig_time_split_timeline.svg", "status": "SKIPPED", "reason": reason})
 
     if (reports / "matching_quality.csv").exists() and (mq := pd.read_csv(reports / "matching_quality.csv")).shape[0] > 0:
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -247,8 +324,16 @@ def main() -> None:
         ax.set_xticks(x); ax.set_xticklabels(mq["property"], rotation=45, ha="right")
         ax.legend(); style_axis(ax, style, "Matching quality", "Property", "KS")
         fig.tight_layout(); fig.savefig(figures / "fig_matching_quality.svg"); plt.close(fig)
+        plot_status.append({"plot": "fig_matching_quality.svg", "status": "CREATED", "reason": "ok"})
     else:
-        (figures / "fig_matching_quality.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><text x="10" y="20">No matching data</text></svg>')
+        reason = "SKIPPED: no matched pairs"
+        logging.warning("Matching quality plot skipped: no matched pairs")
+        write_skip_panel(figures / "fig_matching_quality.svg", reason, "Matching quality")
+        plot_status.append({"plot": "fig_matching_quality.svg", "status": "SKIPPED", "reason": reason})
+
+    summary_df = pd.DataFrame(plot_status)
+    if not summary_df.empty:
+        logging.info("Step 4 plot generation summary:\n%s", summary_df.to_string(index=False))
 
 
 if __name__ == "__main__":
