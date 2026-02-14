@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
+from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
@@ -10,13 +13,21 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 def regression_metrics(y_true, y_pred) -> dict[str, float]:
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+    if y_true.shape[0] < 2:
+        r2 = float("nan")
+    else:
+        r2 = float(r2_score(y_true, y_pred))
     return {
         "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
         "mae": float(mean_absolute_error(y_true, y_pred)),
-        "r2": float(r2_score(y_true, y_pred)),
+        "r2": r2,
     }
 
 
@@ -90,6 +101,11 @@ def per_environment_metrics(df: pd.DataFrame, task: str, env_col: str, label_col
 def linear_probe_env_predictability(z_inv: np.ndarray, env: np.ndarray) -> float:
     if len(np.unique(env)) < 2:
         return float("nan")
-    probe = LogisticRegression(max_iter=1000, multi_class="auto", random_state=0)
-    probe.fit(z_inv, env)
+    probe = make_pipeline(
+        StandardScaler(),
+        LogisticRegression(max_iter=5000, random_state=0),
+    )
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=ConvergenceWarning)
+        probe.fit(z_inv, env)
     return float(probe.score(z_inv, env))

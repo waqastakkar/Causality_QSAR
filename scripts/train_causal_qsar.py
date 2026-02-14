@@ -393,7 +393,7 @@ def main():
             break
 
     jsonl.close()
-    model.load_state_dict(torch.load(run_root / "checkpoints/best.pt", map_location=device))
+    model.load_state_dict(torch.load(run_root / "checkpoints/best.pt", map_location=device, weights_only=True))
 
     hist = pd.DataFrame(history)
     hist[["epoch", "L_pred", "L_env", "L_irm", "L_dis", "total"]].to_csv(
