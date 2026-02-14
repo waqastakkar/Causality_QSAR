@@ -16,14 +16,53 @@ STYLE_KEYS = [
     "font_legend",
 ]
 
+STYLE_ARG_ALIASES = {
+    # Most scripts expose `--svg`; config keeps `svg_only` for manuscript pack compatibility.
+    "svg_only": "svg",
+}
+
 
 def _style_flags(config: dict[str, Any]) -> list[str]:
     style = config.get("style", {})
     flags: list[str] = []
     for key in STYLE_KEYS:
-        if key in style and style[key] is not None:
-            flags.extend([f"--{key}", str(style[key])])
+        if key not in style or style[key] is None:
+            continue
+
+        cli_key = STYLE_ARG_ALIASES.get(key, key)
+        value = style[key]
+        if isinstance(value, bool):
+            if value:
+                flags.append(f"--{cli_key}")
+            continue
+
+        flags.extend([f"--{cli_key}", str(value)])
     return flags
+
+
+def _step5_run_benchmark_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    training = config.get("training", {})
+
+    cmd = ["python", str(Path("scripts") / "run_benchmark.py")]
+    cmd.extend(["--target", str(config["target"])])
+    cmd.extend(["--dataset_parquet", str(out_root / "step3" / "multienv_compound_level.parquet")])
+    cmd.extend(["--splits_dir", str(out_root / "step4")])
+    cmd.extend(["--split_names", str(training.get("split_default", "scaffold_bm"))])
+    cmd.extend(["--outdir", str(out_root / "step5")])
+    cmd.extend(["--task", str(training["task"])])
+    cmd.extend(["--label_col", str(training["label_col"])])
+    cmd.extend(["--env_col", str(training.get("env_col", "env_id"))])
+
+    seeds = training.get("seeds")
+    if isinstance(seeds, list) and seeds:
+        cmd.extend(["--seeds", ",".join(str(seed) for seed in seeds)])
+
+    cmd.extend(_style_flags(config))
+
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
 
 
 def _default_builder(script_name: str, include_style: bool = False) -> StepBuilder:
@@ -128,7 +167,7 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "script": "scripts/run_benchmark.py",
         "required_inputs": ["training.task", "training.label_col"],
         "default_output_path": "{paths.outputs_root}/step5",
-        "build_command": _default_builder("run_benchmark.py"),
+        "build_command": _step5_run_benchmark_builder,
         "depends_on": [4],
     },
     6: {
