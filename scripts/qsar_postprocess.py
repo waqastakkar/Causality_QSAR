@@ -28,7 +28,10 @@ def parse_args() -> argparse.Namespace:
 
 def parse_args_compat() -> tuple[argparse.Namespace, list[str]]:
     """Allow pipeline stub-style invocation (`--config` only) without breaking CLI runs."""
-    if "--input" in set(sys.argv):
+    argv = sys.argv[1:]
+    has_input = any(token == "--input" or token.startswith("--input=") for token in argv)
+    has_outdir = any(token == "--outdir" or token.startswith("--outdir=") for token in argv)
+    if has_input or has_outdir:
         return parse_args(), []
 
     parser = argparse.ArgumentParser(description="Step 2 QSAR post-processing: generate core data tables.")
