@@ -206,13 +206,30 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
     for key, value in overrides.items():
         generate_cmd.extend([f"--{key}", str(value)])
 
+    candidates_dir = step7_out / "candidates"
+    expected_outputs = [
+        candidates_dir / "generated_counterfactuals.parquet",
+        candidates_dir / "filtered_counterfactuals.parquet",
+        candidates_dir / "ranked_topk.parquet",
+    ]
+
     shell_cmd = (
+        "set -euo pipefail; "
         f"if [ ! -f {shlex.quote(str(rules_parquet))} ]; then "
         f"{' '.join(shlex.quote(x) for x in build_rules_cmd)}; "
-        "fi && "
-        f"{' '.join(shlex.quote(x) for x in generate_cmd)}"
+        "fi; "
+        "echo '[step7] Starting generate_counterfactuals.py'; "
+        f"{' '.join(shlex.quote(x) for x in generate_cmd)}; "
+        "echo '[step7] Finished generate_counterfactuals.py'; "
+        + " ".join(
+            f"if [ ! -f {shlex.quote(str(path))} ]; then "
+            f"echo '[step7] ERROR: missing expected output file: {shlex.quote(str(path))}' >&2; "
+            "exit 1; "
+            "fi;"
+            for path in expected_outputs
+        )
     )
-    return ["bash", "-lc", shell_cmd]
+    return ["bash", "-c", shell_cmd]
 
 
 def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
