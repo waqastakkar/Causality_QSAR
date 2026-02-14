@@ -68,6 +68,27 @@ def pick_col(df: pd.DataFrame, candidates: list[str]) -> str | None:
     return None
 
 
+def ensure_molecule_id(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    source_col = pick_col(out, ["molecule_id", "compound_id", "chembl_molecule_id", "mol_id", "id"])
+    if source_col is None:
+        raise ValueError(
+            "Could not determine primary key for compound-level data. "
+            "Expected one of: molecule_id, compound_id, chembl_molecule_id, mol_id, id"
+        )
+    if source_col != "molecule_id":
+        logging.warning("Creating canonical molecule_id from source column '%s'", source_col)
+        out["molecule_id"] = out[source_col]
+
+    out["molecule_id"] = out["molecule_id"].astype(str)
+    dup_count = int(out["molecule_id"].duplicated(keep=False).sum())
+    if dup_count > 0:
+        raise ValueError(
+            f"compound-level primary key molecule_id must be unique; found {dup_count} duplicate rows"
+        )
+    return out
+
+
 def compute_scaffold(smiles: Any) -> str:
     s = str(smiles).strip()
     if not s or s == "nan":
@@ -123,11 +144,9 @@ def main() -> None:
 
     rules = _load_yaml(Path(args.bbb_rules))
 
-    # identifiers
-    id_col = pick_col(comp_df, ["molecule_chembl_id", "compound_id", "molecule_id", "mol_id"])
-    if id_col is None:
-        id_col = "molecule_id"
-        comp_df[id_col] = comp_df.index.astype(str)
+    # canonical compound identifier
+    comp_df = ensure_molecule_id(comp_df)
+    id_col = "molecule_id"
 
     smiles_col = pick_col(comp_df, ["canonical_smiles", "smiles"])
     if smiles_col is None:
