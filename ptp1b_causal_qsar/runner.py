@@ -47,12 +47,31 @@ def execute_steps(
     resolved_config_path = run_dir / "pipeline_config_resolved.yaml"
     resolved_config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
 
+    completed_steps: set[int] = set()
+
     for step in steps:
         if step == 0:
             logger.info("Step 0 selected (CLI), no script execution required.")
             continue
 
         meta = STEPS_REGISTRY[step]
+        missing_dependencies = [dep for dep in meta.get("depends_on", []) if dep not in completed_steps]
+        if missing_dependencies:
+            err = {
+                "step_number": step,
+                "name": meta["name"],
+                "command": None,
+                "traceback": (
+                    f"Step {step} blocked: missing completed prerequisite step(s) "
+                    f"{missing_dependencies}. Ensure prior steps finish successfully before continuing."
+                ),
+            }
+            errors.append(err)
+            logger.error(err["traceback"])
+            if not continue_on_error:
+                break
+            continue
+
         command = meta["build_command"](config, overrides)
         start = datetime.now(timezone.utc)
         logger.info("Running step %s (%s): %s", step, meta["name"], " ".join(command))
@@ -87,6 +106,8 @@ def execute_steps(
             errors.append(err)
             if not continue_on_error:
                 break
+        else:
+            completed_steps.add(step)
 
     dump_json(run_dir / "pipeline_steps_executed.json", step_records)
     if errors:
