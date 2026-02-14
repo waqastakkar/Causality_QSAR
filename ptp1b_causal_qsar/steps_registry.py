@@ -245,15 +245,13 @@ def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, A
 def _step6_reserved_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
     step6_out = out_root / "step6"
-    marker = step6_out / "step6_noop.txt"
 
     script = (
-        "from pathlib import Path; "
+        "from pathlib import Path; import shutil; "
         f"d=Path({step6_out.as_posix()!r}); "
         "d.mkdir(parents=True, exist_ok=True); "
-        f"p=Path({marker.as_posix()!r}); "
-        "p.write_text('reserved step 6 (no-op)\\n', encoding='utf-8'); "
-        "print('Step 6 reserved/no-op')"
+        "[shutil.rmtree(p) if p.is_dir() else p.unlink() for p in d.iterdir()]; "
+        "print('Step 6 reserved/no-op (empty folder)')"
     )
     return [_python_bin(config), "-c", script]
 
@@ -306,6 +304,59 @@ def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: di
     ]
     if bbb_parquet.exists():
         cmd.extend(["--bbb_parquet", str(bbb_parquet)])
+
+    cmd.extend(_style_flags(config))
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
+
+
+def _step10_interpret_model_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    step3_dataset = out_root / "step3" / "multienv_compound_level.parquet"
+    step5_runs_root = out_root / "step5" / str(config["target"])
+    step7_counterfactuals = out_root / "step7" / "candidates" / "ranked_topk.parquet"
+    step10_out = out_root / "step10"
+    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+
+    run_dir = None
+    if step5_runs_root.exists():
+        run_candidates = sorted(step5_runs_root.glob("**/checkpoints/best.pt"))
+        if run_candidates:
+            run_dir = run_candidates[0].parent.parent
+
+    if run_dir is None or not step3_dataset.exists():
+        reason = []
+        if run_dir is None:
+            reason.append("missing trained run checkpoint under outputs/step5")
+        if not step3_dataset.exists():
+            reason.append("missing multienv dataset parquet at outputs/step3")
+        message = ", ".join(reason)
+        script = (
+            "from pathlib import Path; "
+            f"d=Path({step10_out.as_posix()!r}); "
+            "d.mkdir(parents=True, exist_ok=True); "
+            "(d/'step10_noop.txt').write_text(" + repr(f"skipped step 10: {message}\n") + ", encoding='utf-8'); "
+            "print('Step 10 skipped:', " + repr(message) + ")"
+        )
+        return [_python_bin(config), "-c", script]
+
+    cmd = [
+        _python_bin(config),
+        str(Path("scripts") / "interpret_model.py"),
+        "--target",
+        str(config["target"]),
+        "--run_dir",
+        str(run_dir),
+        "--dataset_parquet",
+        str(step3_dataset),
+        "--outdir",
+        str(step10_out),
+    ]
+    if bbb_parquet.exists():
+        cmd.extend(["--bbb_parquet", str(bbb_parquet)])
+    if step7_counterfactuals.exists():
+        cmd.extend(["--counterfactuals_parquet", str(step7_counterfactuals)])
 
     cmd.extend(_style_flags(config))
     for key, value in overrides.items():
@@ -391,7 +442,7 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "script": "scripts/interpret_model.py",
         "required_inputs": ["paths.outputs_root", "style.font"],
         "default_output_path": "{paths.outputs_root}/step10",
-        "build_command": _default_builder("interpret_model.py", include_style=True),
+        "build_command": _step10_interpret_model_builder,
         "depends_on": [9],
     },
     11: {
