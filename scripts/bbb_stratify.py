@@ -12,7 +12,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from scripts.plot_style import PlotStyle, configure_matplotlib, style_axis
+try:
+    from scripts.plot_style import PlotStyle, configure_matplotlib, style_axis
+except ModuleNotFoundError:
+    from plot_style import PlotStyle, configure_matplotlib, style_axis
 
 
 def sha256_file(path: Path) -> str:

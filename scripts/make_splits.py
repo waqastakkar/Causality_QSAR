@@ -28,7 +28,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.plot_style import NATURE5
+try:
+    from scripts.plot_style import NATURE5
+except ModuleNotFoundError:
+    from plot_style import NATURE5
 
 
 def sha256_file(path: Path) -> str:
