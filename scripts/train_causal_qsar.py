@@ -60,6 +60,7 @@ class TrainConfig:
     warmup_epochs: int
     ramp_epochs: int
     epochs: int
+    early_stopping_patience: int
     batch_size: int
     lr: float
     seed: int
@@ -166,7 +167,8 @@ def parse_args():
     p.add_argument("--disentangle", choices=["none", "orthogonality", "hsic"], default="orthogonality")
     p.add_argument("--warmup_epochs", type=int, default=0)
     p.add_argument("--ramp_epochs", type=int, default=0)
-    p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--epochs", type=int, default=300)
+    p.add_argument("--early_stopping_patience", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--seed", type=int, default=42)
@@ -279,6 +281,7 @@ def main():
     opt = torch.optim.Adam(model.parameters(), lr=cfg.lr)
 
     best_val = float("inf")
+    epochs_without_improvement = 0
     history = []
     schedule_rows = []
     irm_diag_rows = []
@@ -375,8 +378,19 @@ def main():
 
         if score < best_val:
             best_val = score
+            epochs_without_improvement = 0
             torch.save(model.state_dict(), run_root / "checkpoints/best.pt")
+        else:
+            epochs_without_improvement += 1
         torch.save(model.state_dict(), run_root / "checkpoints/last.pt")
+
+        if cfg.early_stopping_patience > 0 and epochs_without_improvement >= cfg.early_stopping_patience:
+            logging.info(
+                "Early stopping triggered at epoch %s (patience=%s)",
+                epoch,
+                cfg.early_stopping_patience,
+            )
+            break
 
     jsonl.close()
     model.load_state_dict(torch.load(run_root / "checkpoints/best.pt", map_location=device))

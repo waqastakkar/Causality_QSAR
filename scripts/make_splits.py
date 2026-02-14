@@ -7,6 +7,7 @@ import json
 import platform
 import subprocess
 import sys
+from functools import lru_cache
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ import pandas as pd
 
 try:
     from rdkit import Chem, DataStructs
-    from rdkit.Chem import AllChem
+    from rdkit.Chem import rdFingerprintGenerator
     from rdkit.Chem.Scaffolds import MurckoScaffold
     from rdkit.ML.Cluster import Butina
 except Exception as exc:  # pragma: no cover
@@ -180,11 +181,16 @@ def hard_boundary(df: pd.DataFrame, args) -> dict[str, pd.Index]:
     return {"train": tr, "val": va, "test": hard}
 
 
+@lru_cache(maxsize=8)
+def _morgan_generator(radius: int, nbits: int):
+    return rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nbits)
+
+
 def morgan_fp(smiles: str, radius: int, nbits: int):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
         return None
-    return AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=nbits)
+    return _morgan_generator(radius, nbits).GetFingerprint(mol)
 
 
 def neighbor_similarity_split(df: pd.DataFrame, args) -> dict[str, pd.Index]:

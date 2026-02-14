@@ -23,7 +23,8 @@ def parse_args():
     p.add_argument("--env_col", required=True)
     p.add_argument("--seeds", default="42")
     p.add_argument("--ablations", default="full,no_adv,no_irm,no_dis")
-    p.add_argument("--epochs", type=int, default=20)
+    p.add_argument("--epochs", type=int, default=300)
+    p.add_argument("--early_stopping_patience", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--encoder", default="gine")
@@ -85,6 +86,7 @@ def main():
                     "--lambda_irm", str(l_irm),
                     "--lambda_dis", str(l_dis),
                     "--epochs", str(args.epochs),
+                    "--early_stopping_patience", str(args.early_stopping_patience),
                     "--batch_size", str(args.batch_size),
                     "--lr", str(args.lr),
                     "--seed", str(seed),
