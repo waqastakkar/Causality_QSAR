@@ -39,20 +39,43 @@ def _default_builder(script_name: str, include_style: bool = False) -> StepBuild
     return _build
 
 
+def _step1_extract_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    cmd = ["python", str(Path("scripts") / "extract_chembl36_sqlite.py")]
+    cmd.extend(["--config", config["_config_path"]])
+    cmd.extend(["--db", str(config["paths"]["chembl_sqlite"])])
+    cmd.extend(["--target", str(config["target"])])
+    cmd.extend(["--outdir", str(Path(config["paths"]["outputs_root"]) / "step1")])
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
+
+
+def _step2_postprocess_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    step1_out = out_root / "step1" / f"{config['target']}_qsar_ready.csv"
+    cmd = ["python", str(Path("scripts") / "qsar_postprocess.py")]
+    cmd.extend(["--config", config["_config_path"]])
+    cmd.extend(["--input", str(step1_out)])
+    cmd.extend(["--outdir", str(out_root / "step2")])
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
+
+
 STEPS_REGISTRY: dict[int, dict[str, Any]] = {
     1: {
         "name": "extract_chembl36_sqlite",
         "script": "scripts/extract_chembl36_sqlite.py",
         "required_inputs": ["paths.chembl_sqlite"],
         "default_output_path": "{paths.outputs_root}/step1",
-        "build_command": _default_builder("extract_chembl36_sqlite.py"),
+        "build_command": _step1_extract_builder,
     },
     2: {
         "name": "qsar_postprocess",
         "script": "scripts/qsar_postprocess.py",
         "required_inputs": ["paths.outputs_root"],
         "default_output_path": "{paths.outputs_root}/step2",
-        "build_command": _default_builder("qsar_postprocess.py"),
+        "build_command": _step2_postprocess_builder,
     },
     3: {
         "name": "assemble_environments",
