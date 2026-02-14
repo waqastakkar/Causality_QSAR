@@ -184,6 +184,32 @@ def parse_args():
     return p.parse_args()
 
 
+def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    lower = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in lower:
+            return lower[cand.lower()]
+    return None
+
+
+def normalize_training_inputs(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    id_col = _first_present(out, ["molecule_id", "molecule_chembl_id", "compound_id", "mol_id", "id"])
+    if id_col is None:
+        out["molecule_id"] = out.index.astype(str)
+    elif id_col != "molecule_id":
+        out["molecule_id"] = out[id_col]
+
+    smiles_col = _first_present(out, ["smiles", "canonical_smiles", "smiles_canonical"])
+    if smiles_col is None:
+        raise ValueError("Missing required SMILES column: expected one of smiles/canonical_smiles/smiles_canonical")
+    if smiles_col != "smiles":
+        out["smiles"] = out[smiles_col]
+
+    return out
+
+
 def main():
     args = parse_args()
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -211,7 +237,7 @@ def main():
     with (run_root / "configs/resolved_config.yaml").open("w") as f:
         yaml.safe_dump(asdict(cfg), f)
 
-    df = pd.read_parquet(cfg.dataset_parquet)
+    df = normalize_training_inputs(pd.read_parquet(cfg.dataset_parquet))
     ensure_required_columns(df, ["molecule_id", "smiles", cfg.label_col, cfg.env_col])
     if cfg.sample_weight_col and cfg.sample_weight_col not in df.columns:
         raise ValueError(f"sample_weight_col='{cfg.sample_weight_col}' not in dataset")

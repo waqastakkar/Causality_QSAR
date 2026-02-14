@@ -324,6 +324,39 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+def _first_present(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    lower = {c.lower(): c for c in df.columns}
+    for cand in candidates:
+        if cand.lower() in lower:
+            return lower[cand.lower()]
+    return None
+
+
+def normalize_split_inputs(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    id_col = _first_present(out, ["molecule_id", "molecule_chembl_id", "compound_id", "mol_id", "id"])
+    if id_col is None:
+        out["molecule_id"] = out.index.astype(str)
+    elif id_col != "molecule_id":
+        out["molecule_id"] = out[id_col]
+
+    smiles_col = _first_present(out, ["canonical_smiles", "smiles", "smiles_canonical"])
+    if smiles_col is None:
+        raise ValueError("missing required SMILES column; expected one of canonical_smiles/smiles/smiles_canonical")
+    if smiles_col != "canonical_smiles":
+        out["canonical_smiles"] = out[smiles_col]
+
+    if "activity_label" not in out.columns:
+        if "pIC50" not in out.columns:
+            raise ValueError("missing required label columns: activity_label or pIC50")
+        thr = float(out["pIC50"].median())
+        out["activity_label"] = (pd.to_numeric(out["pIC50"], errors="coerce") >= thr).astype(int)
+
+    out["molecule_id"] = out["molecule_id"].astype(str)
+    return out
+
+
 def main() -> None:
     args = parse_args()
     out_splits = Path(args.outdir)
@@ -334,7 +367,7 @@ def main() -> None:
     for d in [out_splits, reports, figures, prov]:
         d.mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_parquet(args.input_parquet)
+    df = normalize_split_inputs(pd.read_parquet(args.input_parquet))
     required = ["molecule_id", "canonical_smiles", "pIC50", "activity_label"]
     miss = [c for c in required if c not in df.columns]
     if miss:
