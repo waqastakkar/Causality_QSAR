@@ -204,6 +204,44 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
     return ["bash", "-lc", shell_cmd]
 
 
+def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    step3_dataset = out_root / "step3" / "multienv_compound_level.parquet"
+    step4_splits = out_root / "step4"
+    step5_runs_root = out_root / "step5" / str(config["target"])
+    step8_out = out_root / "step8"
+    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+    training = config.get("training", {})
+
+    cmd = [
+        _python_bin(config),
+        str(Path("scripts") / "evaluate_runs.py"),
+        "--target",
+        str(config["target"]),
+        "--runs_root",
+        str(step5_runs_root),
+        "--splits_dir",
+        str(step4_splits),
+        "--dataset_parquet",
+        str(step3_dataset),
+        "--outdir",
+        str(step8_out),
+        "--task",
+        str(training.get("task", "regression")),
+        "--label_col",
+        str(training.get("label_col", "pIC50")),
+        "--env_col",
+        str(training.get("env_col", "env_id_manual")),
+    ]
+    if bbb_parquet.exists():
+        cmd.extend(["--bbb_parquet", str(bbb_parquet)])
+
+    cmd.extend(_style_flags(config))
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
+
+
 def _step6_reserved_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
     step6_out = out_root / "step6"
@@ -218,6 +256,61 @@ def _step6_reserved_builder(config: dict[str, Any], overrides: dict[str, Any]) -
         "print('Step 6 reserved/no-op')"
     )
     return [_python_bin(config), "-c", script]
+
+
+def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    step5_runs_root = out_root / "step5" / str(config["target"])
+    step9_out = out_root / "step9"
+    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+
+    external_candidates = [
+        Path("data/external/processed") / f"{str(config['target']).lower()}_inhibition" / "data" / "inhibition_external_final.parquet",
+        Path("data/external/processed") / "ptp1b_inhibition_chembl335" / "data" / "inhibition_external_final.parquet",
+    ]
+    external_parquet = next((p for p in external_candidates if p.exists()), None)
+
+    run_dir = None
+    if step5_runs_root.exists():
+        run_candidates = sorted(step5_runs_root.glob("**/checkpoints/best.pt"))
+        if run_candidates:
+            run_dir = run_candidates[0].parent.parent
+
+    if run_dir is None or external_parquet is None:
+        reason = []
+        if run_dir is None:
+            reason.append("missing trained run checkpoint under outputs/step5")
+        if external_parquet is None:
+            reason.append("missing external inhibition parquet")
+        message = ", ".join(reason)
+        script = (
+            "from pathlib import Path; "
+            f"d=Path({step9_out.as_posix()!r}); "
+            "d.mkdir(parents=True, exist_ok=True); "
+            "(d/'step9_noop.txt').write_text(" + repr(f"skipped step 9: {message}\n") + ", encoding='utf-8'); "
+            "print('Step 9 skipped:', " + repr(message) + ")"
+        )
+        return [_python_bin(config), "-c", script]
+
+    cmd = [
+        _python_bin(config),
+        str(Path("scripts") / "evaluate_cross_endpoint.py"),
+        "--target",
+        str(config["target"]),
+        "--run_dir",
+        str(run_dir),
+        "--external_parquet",
+        str(external_parquet),
+        "--outdir",
+        str(step9_out),
+    ]
+    if bbb_parquet.exists():
+        cmd.extend(["--bbb_parquet", str(bbb_parquet)])
+
+    cmd.extend(_style_flags(config))
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
 
 
 STEPS_REGISTRY: dict[int, dict[str, Any]] = {
@@ -282,7 +375,7 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "script": "scripts/evaluate_model.py",
         "required_inputs": ["paths.outputs_root"],
         "default_output_path": "{paths.outputs_root}/step8",
-        "build_command": _default_builder("evaluate_model.py"),
+        "build_command": _step8_evaluate_model_builder,
         "depends_on": [7],
     },
     9: {
@@ -290,7 +383,7 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "script": "scripts/evaluate_cross_endpoint.py",
         "required_inputs": ["paths.outputs_root"],
         "default_output_path": "{paths.outputs_root}/step9",
-        "build_command": _default_builder("evaluate_cross_endpoint.py"),
+        "build_command": _step9_evaluate_cross_endpoint_builder,
         "depends_on": [8],
     },
     10: {
