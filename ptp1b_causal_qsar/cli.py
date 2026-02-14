@@ -83,7 +83,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--config", required=True)
     p_run.add_argument("--steps", required=True)
     p_run.add_argument("--dry_run", action="store_true")
-    p_run.add_argument("--continue_on_error", action="store_true")
+    p_run.add_argument(
+        "--continue_on_error",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Continue attempting later steps after a failure (default: True)",
+    )
 
     p_man = sub.add_parser("manuscript", help="Run manuscript build (step 15)")
     p_man.add_argument("--config", required=True)

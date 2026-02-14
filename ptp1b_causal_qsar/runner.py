@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import subprocess
-import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +56,18 @@ def execute_steps(
         meta = STEPS_REGISTRY[step]
         missing_dependencies = [dep for dep in meta.get("depends_on", []) if dep not in completed_steps]
         if missing_dependencies:
+            blocked_record = {
+                "step_number": step,
+                "name": meta["name"],
+                "cmd": None,
+                "start_time": None,
+                "end_time": None,
+                "return_code": None,
+                "status": "blocked",
+                "blocked_by": missing_dependencies,
+                "output_paths": [meta.get("default_output_path")],
+            }
+            step_records.append(blocked_record)
             err = {
                 "step_number": step,
                 "name": meta["name"],
@@ -92,6 +103,7 @@ def execute_steps(
             "start_time": start.isoformat(),
             "end_time": end.isoformat(),
             "return_code": result_code,
+            "status": "ok" if result_code == 0 else "failed",
             "output_paths": [meta.get("default_output_path")],
         }
         step_records.append(record)
@@ -101,7 +113,7 @@ def execute_steps(
                 "step_number": step,
                 "name": meta["name"],
                 "command": command,
-                "traceback": traceback.format_exc(),
+                "traceback": f"Command exited with return code {result_code}: {' '.join(command)}",
             }
             errors.append(err)
             if not continue_on_error:
