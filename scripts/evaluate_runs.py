@@ -96,7 +96,13 @@ def ensure_cols(df: pd.DataFrame, label_col: str) -> pd.DataFrame:
     if pred_col is None:
         raise ValueError("Could not find prediction column in predictions file.")
     out = df.copy()
-    out["y_true"] = out[label_col] if label_col in out.columns else np.nan
+    # Preserve canonical columns when they already exist in prediction artifacts.
+    # Some training outputs save `y_true`/`y_pred` only (without raw `label_col`),
+    # and overwriting `y_true` with NaN would make all downstream metrics empty.
+    if "y_true" not in out.columns and label_col in out.columns:
+        out["y_true"] = out[label_col]
+    elif "y_true" not in out.columns:
+        out["y_true"] = np.nan
     out["y_pred"] = out[pred_col]
     return out
 
