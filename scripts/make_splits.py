@@ -453,6 +453,21 @@ def main() -> None:
     (prov / "provenance.json").write_text(json.dumps(prov_data, indent=2))
     (prov / "environment.txt").write_text(pip_freeze())
 
+    splits_report_cmd = [
+        sys.executable,
+        str(Path("scripts") / "splits_report.py"),
+        "--input_parquet",
+        str(args.input_parquet),
+        "--splits_dir",
+        str(out_splits),
+        "--outdir",
+        str(root),
+    ]
+    try:
+        subprocess.run(splits_report_cmd, check=True)
+    except Exception as exc:
+        (reports / "splits_report_error.txt").write_text(f"Failed to run splits_report.py: {exc}\n")
+
     for csv_name in ["label_shift.csv", "covariate_shift.csv", "scaffold_overlap.csv", "env_overlap.csv", "time_coverage.csv"]:
         p = reports / csv_name
         if not p.exists():
