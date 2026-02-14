@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Any, Callable
 
@@ -129,6 +130,61 @@ def _step3_assemble_environments_builder(config: dict[str, Any], overrides: dict
     return cmd
 
 
+def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    step3_dataset = out_root / "step3" / "multienv_compound_level.parquet"
+    step5_runs_root = out_root / "step5" / str(config["target"])
+    step7_out = out_root / "step7"
+    rules_parquet = step7_out / "rules" / "mmp_rules.parquet"
+
+    build_rules_cmd = [
+        "python",
+        str(Path("scripts") / "build_mmp_rules.py"),
+        "--target",
+        str(config["target"]),
+        "--input_parquet",
+        str(step3_dataset),
+        "--outdir",
+        str(step7_out),
+    ]
+    build_rules_cmd.extend(_style_flags(config))
+
+    generate_cmd = [
+        "python",
+        str(Path("scripts") / "generate_counterfactuals.py"),
+        "--target",
+        str(config["target"]),
+        "--run_dir",
+        str(step5_runs_root),
+        "--dataset_parquet",
+        str(step3_dataset),
+        "--mmp_rules_parquet",
+        str(rules_parquet),
+        "--outdir",
+        str(step7_out),
+    ]
+
+    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+    if bbb_parquet.exists():
+        generate_cmd.extend(["--bbb_parquet", str(bbb_parquet)])
+
+    screening_cfg = config.get("screening", {})
+    if screening_cfg.get("cns_mpo_threshold") is not None:
+        generate_cmd.extend(["--cns_mpo_threshold", str(screening_cfg["cns_mpo_threshold"])])
+
+    generate_cmd.extend(_style_flags(config))
+    for key, value in overrides.items():
+        generate_cmd.extend([f"--{key}", str(value)])
+
+    shell_cmd = (
+        f"if [ ! -f {shlex.quote(str(rules_parquet))} ]; then "
+        f"{' '.join(shlex.quote(x) for x in build_rules_cmd)}; "
+        "fi && "
+        f"{' '.join(shlex.quote(x) for x in generate_cmd)}"
+    )
+    return ["bash", "-lc", shell_cmd]
+
+
 STEPS_REGISTRY: dict[int, dict[str, Any]] = {
     1: {
         "name": "extract_chembl36_sqlite",
@@ -183,7 +239,7 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "script": "scripts/generate_counterfactuals.py",
         "required_inputs": ["paths.outputs_root"],
         "default_output_path": "{paths.outputs_root}/step7",
-        "build_command": _default_builder("generate_counterfactuals.py"),
+        "build_command": _step7_generate_counterfactuals_builder,
         "depends_on": [6],
     },
     8: {
