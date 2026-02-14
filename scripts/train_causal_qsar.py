@@ -240,6 +240,21 @@ def main():
         yaml.safe_dump(asdict(cfg), f)
 
     df = normalize_training_inputs(pd.read_parquet(cfg.dataset_parquet))
+
+    resolved_env_col = cfg.env_col
+    if resolved_env_col not in df.columns:
+        for candidate in ["env_id_manual", "env_id"]:
+            if candidate in df.columns:
+                logging.warning(
+                    "Requested env_col '%s' not found; falling back to '%s'",
+                    cfg.env_col,
+                    candidate,
+                )
+                print(f"WARNING: requested env_col '{cfg.env_col}' not found; using '{candidate}'")
+                resolved_env_col = candidate
+                break
+
+    cfg.env_col = resolved_env_col
     ensure_required_columns(df, ["molecule_id", "smiles", cfg.label_col, cfg.env_col])
     if cfg.sample_weight_col and cfg.sample_weight_col not in df.columns:
         raise ValueError(f"sample_weight_col='{cfg.sample_weight_col}' not in dataset")

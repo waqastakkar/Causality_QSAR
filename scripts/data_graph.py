@@ -121,4 +121,9 @@ def split_dataframe_by_ids(df: pd.DataFrame, ids: dict[str, set[str]], id_col: s
 def ensure_required_columns(df: pd.DataFrame, cols: list[str]) -> None:
     missing = [c for c in cols if c not in df.columns]
     if missing:
-        raise ValueError(f"Missing required columns: {missing}")
+        available = sorted(df.columns.tolist())
+        raise ValueError(
+            "Missing required columns: "
+            f"{missing}. Available columns: {available}. "
+            "Pass --env_col with an existing column name when launching training/benchmark scripts."
+        )
