@@ -6,6 +6,7 @@ import hashlib
 import json
 import platform
 import subprocess
+import warnings
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,7 +71,7 @@ def main() -> None:
     parser.add_argument("--target", required=True)
     parser.add_argument("--input_parquet", required=True)
     parser.add_argument("--outdir", required=True)
-    parser.add_argument("--min_support", type=int, default=10)
+    parser.add_argument("--min_support", type=int, default=3)
     parser.add_argument("--max_cut_bonds", type=int, default=1)
     add_plot_style_args(parser)
     args = parser.parse_args()
@@ -93,22 +94,54 @@ def main() -> None:
     rules_raw = extract_rules(df[smi_col].dropna().astype(str).tolist(), args.max_cut_bonds)
     counter = Counter((lhs, rhs, ctx) for lhs, rhs, ctx in rules_raw)
 
+    def build_rows(min_support: int) -> list[dict[str, object]]:
+        filtered_rows = []
+        for idx, ((lhs, rhs, ctx), support) in enumerate(counter.items(), start=1):
+            if support < min_support:
+                continue
+            filtered_rows.append(
+                {
+                    "rule_id": f"R{idx:06d}",
+                    "lhs_fragment": lhs,
+                    "rhs_fragment": rhs,
+                    "context_fragment": ctx,
+                    "transformation": f"{lhs}>>{rhs}",
+                    "support_count": int(support),
+                    "median_delta_pIC50": 0.0,
+                    "series_scope": "global" if series_col is None else "series_aware",
+                }
+            )
+        return filtered_rows
+
+    support_attempts = [10] if args.min_support <= 3 else [args.min_support]
+    if args.min_support not in support_attempts:
+        support_attempts.append(args.min_support)
+
     rows = []
-    for idx, ((lhs, rhs, ctx), support) in enumerate(counter.items(), start=1):
-        if support < args.min_support:
-            continue
-        rows.append(
-            {
-                "rule_id": f"R{idx:06d}",
-                "lhs_fragment": lhs,
-                "rhs_fragment": rhs,
-                "context_fragment": ctx,
-                "transformation": f"{lhs}>>{rhs}",
-                "support_count": int(support),
-                "median_delta_pIC50": 0.0,
-                "series_scope": "global" if series_col is None else "series_aware",
-            }
+    effective_min_support = support_attempts[0]
+    fallback_applied = False
+    fallback_message = ""
+    for i, support_threshold in enumerate(support_attempts):
+        rows = build_rows(support_threshold)
+        effective_min_support = support_threshold
+        if rows or i == len(support_attempts) - 1:
+            break
+
+    if not rows and effective_min_support > 3:
+        # Safety net for sparse/diverse datasets when caller chooses a high threshold.
+        fallback_applied = True
+        effective_min_support = 3
+        fallback_message = (
+            f"No rules found with min_support={args.min_support}; automatically rebuilt with min_support=3."
         )
+        warnings.warn(fallback_message)
+        rows = build_rows(effective_min_support)
+    elif effective_min_support != args.min_support:
+        fallback_applied = True
+        fallback_message = (
+            f"No rules found with min_support={support_attempts[0]}; automatically rebuilt with min_support={effective_min_support}."
+        )
+        warnings.warn(fallback_message)
     rules_df = pd.DataFrame(rows).sort_values("support_count", ascending=False) if rows else pd.DataFrame(columns=[
         "rule_id", "lhs_fragment", "rhs_fragment", "context_fragment", "transformation", "support_count", "median_delta_pIC50", "series_scope"
     ])
@@ -120,8 +153,28 @@ def main() -> None:
 
     stats = pd.DataFrame(
         {
-            "metric": ["n_input_rows", "n_unique_smiles", "n_rules_before_filter", "n_rules_after_filter", "min_support", "max_cut_bonds"],
-            "value": [len(df), df[smi_col].nunique(), len(counter), len(rules_df), args.min_support, args.max_cut_bonds],
+            "metric": [
+                "n_input_rows",
+                "n_unique_smiles",
+                "n_rules_before_filter",
+                "n_rules_after_filter",
+                "requested_min_support",
+                "effective_min_support",
+                "fallback_applied",
+                "fallback_note",
+                "max_cut_bonds",
+            ],
+            "value": [
+                len(df),
+                df[smi_col].nunique(),
+                len(counter),
+                len(rules_df),
+                args.min_support,
+                effective_min_support,
+                int(fallback_applied),
+                fallback_message or "none",
+                args.max_cut_bonds,
+            ],
         }
     )
     stats.to_csv(stats_path, index=False)
@@ -149,6 +202,10 @@ def main() -> None:
         "script_hash": sha256_file(Path(__file__)),
         "input_dataset_hash": sha256_file(Path(args.input_parquet)),
         "n_rules": int(len(rules_df)),
+        "requested_min_support": int(args.min_support),
+        "effective_min_support": int(effective_min_support),
+        "fallback_applied": bool(fallback_applied),
+        "fallback_note": fallback_message or None,
     }
     prov_path.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
     print(f"Wrote rules to {rules_path}")
