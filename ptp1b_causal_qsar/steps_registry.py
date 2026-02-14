@@ -84,6 +84,15 @@ def _step5_run_benchmark_builder(config: dict[str, Any], overrides: dict[str, An
     return cmd
 
 
+def _resolve_first_run_dir(runs_root: Path) -> Path | None:
+    if not runs_root.exists():
+        return None
+    run_candidates = sorted(runs_root.glob("**/checkpoints/best.pt"))
+    if not run_candidates:
+        return None
+    return run_candidates[0].parent.parent
+
+
 def _default_builder(script_name: str, include_style: bool = False) -> StepBuilder:
     def _build(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
         cmd = [_python_bin(config), str(Path("scripts") / script_name)]
@@ -151,9 +160,11 @@ def _step3_assemble_environments_builder(config: dict[str, Any], overrides: dict
 def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
     step3_dataset = out_root / "step3" / "multienv_compound_level.parquet"
+    step6_runs_root = out_root / "step6" / str(config["target"])
     step5_runs_root = out_root / "step5" / str(config["target"])
     step7_out = out_root / "step7"
     rules_parquet = step7_out / "rules" / "mmp_rules.parquet"
+    run_dir = _resolve_first_run_dir(step6_runs_root) or _resolve_first_run_dir(step5_runs_root) or step6_runs_root
 
     py = _python_bin(config)
     build_rules_cmd = [
@@ -174,7 +185,7 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
         "--target",
         str(config["target"]),
         "--run_dir",
-        str(step5_runs_root),
+        str(run_dir),
         "--dataset_parquet",
         str(step3_dataset),
         "--mmp_rules_parquet",
@@ -208,10 +219,12 @@ def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, A
     out_root = Path(config["paths"]["outputs_root"])
     step3_dataset = out_root / "step3" / "multienv_compound_level.parquet"
     step4_splits = out_root / "step4"
+    step6_runs_root = out_root / "step6" / str(config["target"])
     step5_runs_root = out_root / "step5" / str(config["target"])
     step8_out = out_root / "step8"
     bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
     training = config.get("training", {})
+    runs_root = step6_runs_root if step6_runs_root.exists() else step5_runs_root
 
     cmd = [
         _python_bin(config),
@@ -219,7 +232,7 @@ def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, A
         "--target",
         str(config["target"]),
         "--runs_root",
-        str(step5_runs_root),
+        str(runs_root),
         "--splits_dir",
         str(step4_splits),
         "--dataset_parquet",
@@ -242,23 +255,52 @@ def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, A
     return cmd
 
 
-def _step6_reserved_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+def _step6_train_exact_objective_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
-    step6_out = out_root / "step6"
+    training = config.get("training", {})
 
-    script = (
-        "from pathlib import Path; import shutil; "
-        f"d=Path({step6_out.as_posix()!r}); "
-        "d.mkdir(parents=True, exist_ok=True); "
-        "[shutil.rmtree(p) if p.is_dir() else p.unlink() for p in d.iterdir()]; "
-        "(d / 'README.txt').write_text('Step 6 is intentionally reserved as a no-op placeholder.\\n', encoding='utf-8'); "
-        "print('Step 6 reserved/no-op (marker file written)')"
-    )
-    return [_python_bin(config), "-c", script]
+    cmd = [
+        _python_bin(config),
+        str(Path("scripts") / "train_causal_qsar.py"),
+        "--target",
+        str(config["target"]),
+        "--dataset_parquet",
+        str(out_root / "step3" / "multienv_compound_level.parquet"),
+        "--splits_dir",
+        str(out_root / "step4"),
+        "--split_name",
+        str(training.get("split_default", "scaffold_bm")),
+        "--outdir",
+        str(out_root / "step6"),
+        "--task",
+        str(training.get("task", "regression")),
+        "--label_col",
+        str(training.get("label_col", "pIC50")),
+        "--env_col",
+        str(training.get("env_col", "env_id_manual")),
+        "--epochs",
+        str(training.get("epochs", 20)),
+        "--early_stopping_patience",
+        str(training.get("early_stopping_patience", 10)),
+    ]
+
+    seeds = training.get("seeds")
+    if isinstance(seeds, list) and seeds:
+        cmd.extend(["--seed", str(seeds[0])])
+
+    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+    if bbb_parquet.exists():
+        cmd.extend(["--bbb_parquet", str(bbb_parquet)])
+
+    cmd.extend(_style_flags(config))
+    for key, value in overrides.items():
+        cmd.extend([f"--{key}", str(value)])
+    return cmd
 
 
 def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
+    step6_runs_root = out_root / "step6" / str(config["target"])
     step5_runs_root = out_root / "step5" / str(config["target"])
     step9_out = out_root / "step9"
     bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
@@ -269,11 +311,7 @@ def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: di
     ]
     external_parquet = next((p for p in external_candidates if p.exists()), None)
 
-    run_dir = None
-    if step5_runs_root.exists():
-        run_candidates = sorted(step5_runs_root.glob("**/checkpoints/best.pt"))
-        if run_candidates:
-            run_dir = run_candidates[0].parent.parent
+    run_dir = _resolve_first_run_dir(step6_runs_root) or _resolve_first_run_dir(step5_runs_root)
 
     if run_dir is None or external_parquet is None:
         reason = []
@@ -315,16 +353,13 @@ def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: di
 def _step10_interpret_model_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
     step3_dataset = out_root / "step3" / "multienv_compound_level.parquet"
+    step6_runs_root = out_root / "step6" / str(config["target"])
     step5_runs_root = out_root / "step5" / str(config["target"])
     step7_counterfactuals = out_root / "step7" / "candidates" / "ranked_topk.parquet"
     step10_out = out_root / "step10"
     bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
 
-    run_dir = None
-    if step5_runs_root.exists():
-        run_candidates = sorted(step5_runs_root.glob("**/checkpoints/best.pt"))
-        if run_candidates:
-            run_dir = run_candidates[0].parent.parent
+    run_dir = _resolve_first_run_dir(step6_runs_root) or _resolve_first_run_dir(step5_runs_root)
 
     if run_dir is None or not step3_dataset.exists():
         reason = []
@@ -407,11 +442,11 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "depends_on": [4],
     },
     6: {
-        "name": "reserved_step6",
-        "script": None,
-        "required_inputs": [],
+        "name": "train_exact_objective",
+        "script": "scripts/train_causal_qsar.py",
+        "required_inputs": ["paths.outputs_root", "training.task", "training.label_col"],
         "default_output_path": "{paths.outputs_root}/step6",
-        "build_command": _step6_reserved_builder,
+        "build_command": _step6_train_exact_objective_builder,
         "depends_on": [5],
     },
     7: {
