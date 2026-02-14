@@ -21,6 +21,8 @@ training:
   label_col: pIC50
   seeds: [1, 2, 3, 4, 5]
   split_default: scaffold_bm
+  epochs: 300
+  early_stopping_patience: 30
 
 robustness:
   ensemble_size: 5
