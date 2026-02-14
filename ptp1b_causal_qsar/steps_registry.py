@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shlex
+import sys
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +23,22 @@ STYLE_ARG_ALIASES = {
     # Most scripts expose `--svg`; config keeps `svg_only` for manuscript pack compatibility.
     "svg_only": "svg",
 }
+
+
+def _python_bin(config: dict[str, Any]) -> str:
+    """Resolve the interpreter used to execute pipeline steps.
+
+    Priority:
+    1) `config.runtime.python` (explicit pipeline config override)
+    2) `PIPELINE_PYTHON` environment variable
+    3) current interpreter (`sys.executable`)
+    """
+
+    runtime_python = config.get("runtime", {}).get("python") if isinstance(config.get("runtime"), dict) else None
+    if runtime_python:
+        return str(runtime_python)
+
+    return os.environ.get("PIPELINE_PYTHON") or sys.executable
 
 
 def _style_flags(config: dict[str, Any]) -> list[str]:
@@ -45,7 +63,7 @@ def _step5_run_benchmark_builder(config: dict[str, Any], overrides: dict[str, An
     out_root = Path(config["paths"]["outputs_root"])
     training = config.get("training", {})
 
-    cmd = ["python", str(Path("scripts") / "run_benchmark.py")]
+    cmd = [_python_bin(config), str(Path("scripts") / "run_benchmark.py")]
     cmd.extend(["--target", str(config["target"])])
     cmd.extend(["--dataset_parquet", str(out_root / "step3" / "multienv_compound_level.parquet")])
     cmd.extend(["--splits_dir", str(out_root / "step4")])
@@ -68,7 +86,7 @@ def _step5_run_benchmark_builder(config: dict[str, Any], overrides: dict[str, An
 
 def _default_builder(script_name: str, include_style: bool = False) -> StepBuilder:
     def _build(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
-        cmd = ["python", str(Path("scripts") / script_name)]
+        cmd = [_python_bin(config), str(Path("scripts") / script_name)]
         cmd.extend(["--config", config["_config_path"]])
         if include_style:
             cmd.extend(_style_flags(config))
@@ -80,7 +98,7 @@ def _default_builder(script_name: str, include_style: bool = False) -> StepBuild
 
 
 def _step1_extract_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
-    cmd = ["python", str(Path("scripts") / "extract_chembl36_sqlite.py")]
+    cmd = [_python_bin(config), str(Path("scripts") / "extract_chembl36_sqlite.py")]
     cmd.extend(["--config", config["_config_path"]])
     cmd.extend(["--db", str(config["paths"]["chembl_sqlite"])])
     cmd.extend(["--target", str(config["target"])])
@@ -93,7 +111,7 @@ def _step1_extract_builder(config: dict[str, Any], overrides: dict[str, Any]) ->
 def _step2_postprocess_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
     out_root = Path(config["paths"]["outputs_root"])
     step1_out = out_root / "step1" / f"{config['target']}_qsar_ready.csv"
-    cmd = ["python", str(Path("scripts") / "qsar_postprocess.py")]
+    cmd = [_python_bin(config), str(Path("scripts") / "qsar_postprocess.py")]
     cmd.extend(["--config", config["_config_path"]])
     cmd.extend(["--input", str(step1_out)])
     cmd.extend(["--outdir", str(out_root / "step2")])
@@ -114,7 +132,7 @@ def _step3_assemble_environments_builder(config: dict[str, Any], overrides: dict
     series_rules = env_cfg.get("series_rules")
     env_keys = env_cfg.get("env_keys")
 
-    cmd = ["python", str(Path("scripts") / "assemble_environments.py")]
+    cmd = [_python_bin(config), str(Path("scripts") / "assemble_environments.py")]
     cmd.extend(["--target", str(config["target"])])
     cmd.extend(["--row_level_csv", str(row_level_csv)])
     cmd.extend(["--compound_level_csv", str(compound_level_csv)])
@@ -137,8 +155,9 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
     step7_out = out_root / "step7"
     rules_parquet = step7_out / "rules" / "mmp_rules.parquet"
 
+    py = _python_bin(config)
     build_rules_cmd = [
-        "python",
+        py,
         str(Path("scripts") / "build_mmp_rules.py"),
         "--target",
         str(config["target"]),
@@ -150,7 +169,7 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
     build_rules_cmd.extend(_style_flags(config))
 
     generate_cmd = [
-        "python",
+        py,
         str(Path("scripts") / "generate_counterfactuals.py"),
         "--target",
         str(config["target"]),
@@ -183,6 +202,22 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
         f"{' '.join(shlex.quote(x) for x in generate_cmd)}"
     )
     return ["bash", "-lc", shell_cmd]
+
+
+def _step6_reserved_builder(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
+    out_root = Path(config["paths"]["outputs_root"])
+    step6_out = out_root / "step6"
+    marker = step6_out / "step6_noop.txt"
+
+    script = (
+        "from pathlib import Path; "
+        f"d=Path({step6_out.as_posix()!r}); "
+        "d.mkdir(parents=True, exist_ok=True); "
+        f"p=Path({marker.as_posix()!r}); "
+        "p.write_text('reserved step 6 (no-op)\\n', encoding='utf-8'); "
+        "print('Step 6 reserved/no-op')"
+    )
+    return [_python_bin(config), "-c", script]
 
 
 STEPS_REGISTRY: dict[int, dict[str, Any]] = {
@@ -231,7 +266,7 @@ STEPS_REGISTRY: dict[int, dict[str, Any]] = {
         "script": None,
         "required_inputs": [],
         "default_output_path": "{paths.outputs_root}/step6",
-        "build_command": lambda config, overrides: ["python", "-c", "print('Step 6 reserved/no-op')"],
+        "build_command": _step6_reserved_builder,
         "depends_on": [5],
     },
     7: {
