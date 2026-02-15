@@ -120,6 +120,11 @@ def main() -> None:
         data["pIC50"] = data[pic50_col]
 
     rules = pd.read_parquet(args.mmp_rules_parquet)
+    n_rules = int(len(rules))
+    if n_rules == 0:
+        raise SystemExit(
+            "No MMP rules were loaded (n_rules=0). Rebuild rules with a lower --min_support to recover candidate edits."
+        )
     seeds = data[[id_col, smi_col] + (["pIC50"] if "pIC50" in data.columns else [])].head(args.seed_limit).copy()
     seeds.columns = ["seed_id", "seed_smiles"] + (["pIC50"] if "pIC50" in seeds.columns else [])
     seeds.to_parquet(outdir / "candidates" / "seeds.parquet", index=False)
@@ -129,7 +134,9 @@ def main() -> None:
         bbb = pd.read_parquet(args.bbb_parquet)
 
     generated_rows = []
+    valid_rows = []
     validity_reasons: list[str] = []
+    n_generated = 0
     for _, seed in seeds.iterrows():
         seed_smiles = str(seed["seed_smiles"])
         seed_rec = sanitize_smiles(seed_smiles)
@@ -147,6 +154,7 @@ def main() -> None:
             if not cand_smiles:
                 continue
             applied += 1
+            n_generated += 1
             cand_rec = sanitize_smiles(cand_smiles)
             if not cand_rec.valid:
                 validity_reasons.append(cand_rec.reason or "invalid")
@@ -171,37 +179,37 @@ def main() -> None:
             cns_mpo = cns_mpo_score(cand_rec.props)
             cns_like = bool(cns_mpo >= args.cns_mpo_threshold) if pd.notna(cns_mpo) else False
             seed_cns_like = bool(seed_mpo >= args.cns_mpo_threshold) if pd.notna(seed_mpo) else False
+
+            row = {
+                "seed_id": seed["seed_id"],
+                "seed_smiles": seed_rec.smiles,
+                "cand_id": f"{seed['seed_id']}_r{rule['rule_id']}",
+                "cand_smiles": cand_rec.smiles,
+                "rule_id": rule["rule_id"],
+                "rule_support_count": rule.get("support_count", np.nan),
+                "yhat_x": approx_model_yhat(pd.Series(seed_props | {"pIC50": seed.get("pIC50", np.nan)})),
+                "yhat_xprime": approx_model_yhat(pd.Series(cand_rec.props)),
+                "seed_cns_mpo": seed_mpo,
+                "cand_cns_mpo": cns_mpo,
+                "seed_cns_like": seed_cns_like,
+                "cand_cns_like": cns_like,
+                "tanimoto": sim,
+                "chemical_distance": dist,
+                **{f"cand_{k}": v for k, v in cand_rec.props.items()},
+            }
+            row["delta_yhat"] = row["yhat_xprime"] - row["yhat_x"]
+            row["delta_cns_mpo"] = cns_mpo - seed_mpo if pd.notna(cns_mpo) and pd.notna(seed_mpo) else np.nan
+            valid_rows.append(row)
+
             if args.cns_constraint == "keep_cns_like" and seed_cns_like and not cns_like:
                 validity_reasons.append("cns_like_not_preserved")
                 continue
             if args.cns_constraint == "within_thresholds" and pd.notna(cns_mpo) and cns_mpo < args.cns_mpo_threshold:
                 validity_reasons.append("cns_mpo_below_threshold")
                 continue
+            generated_rows.append(row)
 
-            yx = approx_model_yhat(pd.Series(seed_props | {"pIC50": seed.get("pIC50", np.nan)}))
-            yxp = approx_model_yhat(pd.Series(cand_rec.props))
-            generated_rows.append(
-                {
-                    "seed_id": seed["seed_id"],
-                    "seed_smiles": seed_rec.smiles,
-                    "cand_id": f"{seed['seed_id']}_r{rule['rule_id']}",
-                    "cand_smiles": cand_rec.smiles,
-                    "rule_id": rule["rule_id"],
-                    "rule_support_count": rule.get("support_count", np.nan),
-                    "yhat_x": yx,
-                    "yhat_xprime": yxp,
-                    "delta_yhat": yxp - yx,
-                    "seed_cns_mpo": seed_mpo,
-                    "cand_cns_mpo": cns_mpo,
-                    "delta_cns_mpo": cns_mpo - seed_mpo if pd.notna(cns_mpo) and pd.notna(seed_mpo) else np.nan,
-                    "seed_cns_like": seed_cns_like,
-                    "cand_cns_like": cns_like,
-                    "tanimoto": sim,
-                    "chemical_distance": dist,
-                    **{f"cand_{k}": v for k, v in cand_rec.props.items()},
-                }
-            )
-
+    valid = pd.DataFrame(valid_rows)
     generated = pd.DataFrame(generated_rows)
     generated_path = outdir / "candidates" / "generated_counterfactuals.parquet"
     generated.to_parquet(generated_path, index=False)
@@ -230,15 +238,45 @@ def main() -> None:
     ranked_path = outdir / "candidates" / "ranked_topk.parquet"
     ranked.to_parquet(ranked_path, index=False)
 
-    n_seeds = len(seeds)
-    n_generated = len(generated)
+    n_seed_molecules = len(seeds)
+    n_valid = len(valid)
+    n_pass_bbb = len(generated)
     n_filtered = len(filtered)
-    n_ranked = len(ranked)
+    n_ranked_topk = len(ranked)
     print(
-        "Counterfactual row counts: "
-        f"n_seeds={n_seeds}, n_generated={n_generated}, n_filtered={n_filtered}, n_ranked={n_ranked}",
+        "Counterfactual stage counts: "
+        f"n_rules={n_rules}, "
+        f"n_seed_molecules={n_seed_molecules}, "
+        f"n_generated={n_generated}, "
+        f"n_valid={n_valid}, "
+        f"n_pass_bbb={n_pass_bbb}, "
+        f"n_ranked_topk={n_ranked_topk}",
         file=sys.stderr,
     )
+
+    if n_seed_molecules == 0:
+        print("Stage n_seed_molecules=0: dataset is empty after loading or seed_limit is 0.", file=sys.stderr)
+    if n_generated == 0:
+        print("Stage n_generated=0: no rule LHS matched seed SMILES (or max_edits_per_seed=0).", file=sys.stderr)
+    if n_valid == 0:
+        print(
+            "Stage n_valid=0: all generated candidates failed molecule validity/structural/similarity/synthesis checks.",
+            file=sys.stderr,
+        )
+    if n_pass_bbb == 0:
+        missing_cns = bool(n_valid > 0 and "cand_cns_mpo" in valid.columns and valid["cand_cns_mpo"].isna().all())
+        if missing_cns:
+            print(
+                "Stage n_pass_bbb=0: CNS MPO is missing for all valid candidates (missing CNS MPO column/properties).",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Stage n_pass_bbb=0: CNS BBB constraints removed all valid candidates; threshold may be too strict.",
+                file=sys.stderr,
+            )
+    if n_ranked_topk == 0:
+        print("Stage n_ranked_topk=0: nothing remained after BBB-constrained filtering and deduplication.", file=sys.stderr)
     if n_filtered == 0:
         reason_counts = pd.Series(validity_reasons).value_counts()
         top_reasons = reason_counts.head(5).to_dict() if not reason_counts.empty else {}
@@ -263,7 +301,19 @@ def main() -> None:
         except Exception as exc:
             print(f"Could not inspect {parquet_path}: {exc}", file=sys.stderr)
 
-    delta = ranked[[c for c in ["seed_id", "cand_id", "yhat_x", "yhat_xprime", "delta_yhat", "seed_cns_mpo", "cand_cns_mpo", "delta_cns_mpo", "tanimoto", "rule_id"] if c in ranked.columns]]
+    delta_columns = [
+        "seed_id",
+        "cand_id",
+        "yhat_x",
+        "yhat_xprime",
+        "delta_yhat",
+        "seed_cns_mpo",
+        "cand_cns_mpo",
+        "delta_cns_mpo",
+        "tanimoto",
+        "rule_id",
+    ]
+    delta = ranked.reindex(columns=delta_columns)
     delta.to_csv(outdir / "evaluation" / "delta_predictions.csv", index=False)
 
     monotonic = pd.DataFrame(columns=["cand_id", "rule_id", "violation"])
@@ -381,10 +431,14 @@ def main() -> None:
             "bbb": sha256_file(Path(args.bbb_parquet)) if args.bbb_parquet and Path(args.bbb_parquet).exists() else None,
         },
         "counts": {
-            "n_seeds": int(n_seeds),
+            "n_rules": int(n_rules),
+            "n_seed_molecules": int(n_seed_molecules),
             "n_generated": int(n_generated),
+            "n_valid": int(n_valid),
+            "n_pass_bbb": int(n_pass_bbb),
+            "n_ranked_topk": int(n_ranked_topk),
             "n_filtered": int(n_filtered),
-            "n_ranked": int(n_ranked),
+            "n_ranked": int(n_ranked_topk),
             "n_passing_filters": int(n_filtered),
             "topk": args.topk_per_seed,
         },
