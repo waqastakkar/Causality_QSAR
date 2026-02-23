@@ -442,10 +442,16 @@ def main() -> None:
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_zinv_stability.svg"); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))
-    if not cf_df.empty:
+    if not cf_df.empty and {"rule_id", "invariance_score"}.issubset(cf_df.columns):
         top = cf_df.groupby("rule_id")["invariance_score"].mean().sort_values(ascending=False).head(10)
         ax.bar(top.index.astype(str), top.values)
         ax.tick_params(axis="x", rotation=55)
+    elif not cf_df.empty:
+        missing = [c for c in ["rule_id", "invariance_score"] if c not in cf_df.columns]
+        print(
+            "WARNING: fig_cf_consistency_across_envs skipped "
+            f"(missing columns: {', '.join(missing)})."
+        )
     style_axis(ax, style, "CF Consistency Across Environments", "Rule", "Invariance score")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_cf_consistency_across_envs.svg"); plt.close(fig)
 
