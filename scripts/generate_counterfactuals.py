@@ -63,10 +63,105 @@ def approx_model_yhat(row: pd.Series) -> float:
     return float(score)
 
 
-def apply_rule(smiles: str, lhs: str, rhs: str) -> str | None:
-    if lhs and lhs in smiles:
-        return smiles.replace(lhs, rhs, 1)
-    return None
+def _find_dummy_and_anchor(mol):
+    dummy_atoms = [atom for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0]
+    if len(dummy_atoms) != 1:
+        mapped = [atom for atom in dummy_atoms if atom.GetAtomMapNum() == 1]
+        if len(mapped) == 1:
+            dummy_atoms = mapped
+        else:
+            return None
+    dummy = dummy_atoms[0]
+    neighbors = list(dummy.GetNeighbors())
+    if len(neighbors) != 1:
+        return None
+    return dummy.GetIdx(), neighbors[0].GetIdx()
+
+
+def combine_core_side(core_smi: str, side_smi: str) -> str | None:
+    from rdkit import Chem
+
+    core = Chem.MolFromSmiles(core_smi)
+    side = Chem.MolFromSmiles(side_smi)
+    if core is None or side is None:
+        return None
+
+    core_attach = _find_dummy_and_anchor(core)
+    side_attach = _find_dummy_and_anchor(side)
+    if core_attach is None or side_attach is None:
+        return None
+    core_dummy_idx, core_anchor_idx = core_attach
+    side_dummy_idx, side_anchor_idx = side_attach
+
+    try:
+        combo = Chem.CombineMols(core, side)
+        rw = Chem.RWMol(combo)
+        side_offset = core.GetNumAtoms()
+        rw.AddBond(core_anchor_idx, side_anchor_idx + side_offset, Chem.BondType.SINGLE)
+        for idx in sorted([core_dummy_idx, side_dummy_idx + side_offset], reverse=True):
+            rw.RemoveAtom(idx)
+        out = rw.GetMol()
+        Chem.SanitizeMol(out)
+        return Chem.MolToSmiles(out, canonical=True)
+    except Exception:
+        return None
+
+
+def _fragment_seed_pairs(seed_smiles: str, frag_settings: dict) -> list[tuple[str, str]]:
+    from rdkit import Chem
+    from rdkit.Chem import rdMMPA
+
+    cache = frag_settings.setdefault("_fragment_cache", {})
+    if seed_smiles in cache:
+        return cache[seed_smiles]
+
+    seed_mol = Chem.MolFromSmiles(seed_smiles)
+    if seed_mol is None:
+        cache[seed_smiles] = []
+        return []
+
+    fragment_rows = list(
+        rdMMPA.FragmentMol(
+            seed_mol,
+            maxCuts=frag_settings.get("maxCuts", 1),
+            maxCutBonds=frag_settings.get("maxCutBonds", 20),
+            pattern=frag_settings.get("pattern", "[!#1]!@!=!#[!#1]"),
+            resultsAsMols=False,
+        )
+    )
+
+    pairs: list[tuple[str, str]] = []
+    for row in fragment_rows:
+        if not isinstance(row, tuple):
+            continue
+        if len(row) == 2 and str(row[0]).strip() == "" and "." in str(row[1]):
+            parts = [p.strip() for p in str(row[1]).split(".") if p.strip()]
+            if len(parts) >= 2:
+                pairs.append((parts[0], parts[1]))
+                continue
+        frags = [str(v).strip() for v in row if isinstance(v, str) and str(v).strip() and "*" in str(v)]
+        if len(frags) >= 2:
+            pairs.append((frags[0], frags[1]))
+
+    cache[seed_smiles] = pairs
+    return pairs
+
+
+def seed_candidates_from_rule(seed_smiles, rule_ctx, lhs, rhs, frag_settings) -> list[str]:
+    pairs = _fragment_seed_pairs(seed_smiles, frag_settings)
+    diags = frag_settings.setdefault("_diag", {"fragment_rows": 0, "rule_matches": 0})
+    diags["fragment_rows"] += len(pairs)
+    out: list[str] = []
+    for frag_a, frag_b in pairs:
+        core, side = (frag_a, frag_b) if len(frag_a) >= len(frag_b) else (frag_b, frag_a)
+        matched = (core == rule_ctx and side == lhs) or (side == rule_ctx and core == lhs)
+        if not matched:
+            continue
+        diags["rule_matches"] += 1
+        cand = combine_core_side(core, rhs)
+        if cand is not None:
+            out.append(cand)
+    return list(dict.fromkeys(out))
 
 
 def write_no_data_svg(path: Path, label: str = "NO DATA (0 rows)") -> None:
@@ -137,6 +232,10 @@ def main() -> None:
     valid_rows = []
     validity_reasons: list[str] = []
     n_generated = 0
+    frag_settings = {"maxCuts": 1, "maxCutBonds": 20, "pattern": "[!#1]!@!=!#[!#1]"}
+    sorted_rules = rules.sort_values("support_count", ascending=False)
+    total_fragment_rows = 0
+    total_rule_matches = 0
     for _, seed in seeds.iterrows():
         seed_smiles = str(seed["seed_smiles"])
         seed_rec = sanitize_smiles(seed_smiles)
@@ -147,67 +246,86 @@ def main() -> None:
         seed_scaffold = murcko_scaffold(seed_rec.smiles)
 
         applied = 0
-        for _, rule in rules.sort_values("support_count", ascending=False).iterrows():
+        seed_fragment_rows = 0
+        seed_rule_matches = 0
+        for _, rule in sorted_rules.iterrows():
             if applied >= args.max_edits_per_seed:
                 break
-            cand_smiles = apply_rule(seed_rec.smiles, str(rule["lhs_fragment"]), str(rule["rhs_fragment"]))
-            if not cand_smiles:
+            lhs = str(rule["lhs_fragment"])
+            rhs = str(rule["rhs_fragment"])
+            rule_ctx = str(rule.get("context_fragment", ""))
+            diag_before = dict(frag_settings.get("_diag", {"fragment_rows": 0, "rule_matches": 0}))
+            candidates = seed_candidates_from_rule(seed_rec.smiles, rule_ctx, lhs, rhs, frag_settings)
+            diag_after = frag_settings.get("_diag", {"fragment_rows": 0, "rule_matches": 0})
+            seed_fragment_rows += int(diag_after.get("fragment_rows", 0) - diag_before.get("fragment_rows", 0))
+            seed_rule_matches += int(diag_after.get("rule_matches", 0) - diag_before.get("rule_matches", 0))
+            if not candidates:
                 continue
-            applied += 1
-            n_generated += 1
-            cand_rec = sanitize_smiles(cand_smiles)
-            if not cand_rec.valid:
-                validity_reasons.append(cand_rec.reason or "invalid")
-                continue
-            sim = tanimoto_similarity(seed_rec.smiles, cand_rec.smiles)
-            dist = 1.0 - sim if pd.notna(sim) else np.nan
-            if pd.notna(sim) and not (args.min_tanimoto <= sim <= args.max_tanimoto):
-                validity_reasons.append("tanimoto_out_of_range")
-                continue
-            if args.preserve == "scaffold":
-                if seed_scaffold and murcko_scaffold(cand_rec.smiles) != seed_scaffold:
-                    validity_reasons.append("scaffold_not_preserved")
+            for cand_smiles in candidates:
+                if applied >= args.max_edits_per_seed:
+                    break
+                applied += 1
+                n_generated += 1
+                cand_rec = sanitize_smiles(cand_smiles)
+                if not cand_rec.valid:
+                    validity_reasons.append(cand_rec.reason or "invalid")
                     continue
-            else:
-                if not has_motif(cand_rec.smiles, args.motif_smarts):
-                    validity_reasons.append("motif_not_preserved")
+                sim = tanimoto_similarity(seed_rec.smiles, cand_rec.smiles)
+                dist = 1.0 - sim if pd.notna(sim) else np.nan
+                if pd.notna(sim) and not (args.min_tanimoto <= sim <= args.max_tanimoto):
+                    validity_reasons.append("tanimoto_out_of_range")
                     continue
-            if not synthetic_feasibility_ok(cand_rec.props):
-                validity_reasons.append("synthetic_filter_failed")
-                continue
 
-            cns_mpo = cns_mpo_score(cand_rec.props)
-            cns_like = bool(cns_mpo >= args.cns_mpo_threshold) if pd.notna(cns_mpo) else False
-            seed_cns_like = bool(seed_mpo >= args.cns_mpo_threshold) if pd.notna(seed_mpo) else False
+                if args.preserve == "scaffold":
+                    if seed_scaffold and murcko_scaffold(cand_rec.smiles) != seed_scaffold:
+                        validity_reasons.append("scaffold_not_preserved")
+                        continue
+                else:
+                    if not has_motif(cand_rec.smiles, args.motif_smarts):
+                        validity_reasons.append("motif_not_preserved")
+                        continue
+                if not synthetic_feasibility_ok(cand_rec.props):
+                    validity_reasons.append("synthetic_filter_failed")
+                    continue
 
-            row = {
-                "seed_id": seed["seed_id"],
-                "seed_smiles": seed_rec.smiles,
-                "cand_id": f"{seed['seed_id']}_r{rule['rule_id']}",
-                "cand_smiles": cand_rec.smiles,
-                "rule_id": rule["rule_id"],
-                "rule_support_count": rule.get("support_count", np.nan),
-                "yhat_x": approx_model_yhat(pd.Series(seed_props | {"pIC50": seed.get("pIC50", np.nan)})),
-                "yhat_xprime": approx_model_yhat(pd.Series(cand_rec.props)),
-                "seed_cns_mpo": seed_mpo,
-                "cand_cns_mpo": cns_mpo,
-                "seed_cns_like": seed_cns_like,
-                "cand_cns_like": cns_like,
-                "tanimoto": sim,
-                "chemical_distance": dist,
-                **{f"cand_{k}": v for k, v in cand_rec.props.items()},
-            }
-            row["delta_yhat"] = row["yhat_xprime"] - row["yhat_x"]
-            row["delta_cns_mpo"] = cns_mpo - seed_mpo if pd.notna(cns_mpo) and pd.notna(seed_mpo) else np.nan
-            valid_rows.append(row)
+                cns_mpo = cns_mpo_score(cand_rec.props)
+                cns_like = bool(cns_mpo >= args.cns_mpo_threshold) if pd.notna(cns_mpo) else False
+                seed_cns_like = bool(seed_mpo >= args.cns_mpo_threshold) if pd.notna(seed_mpo) else False
 
-            if args.cns_constraint == "keep_cns_like" and seed_cns_like and not cns_like:
-                validity_reasons.append("cns_like_not_preserved")
-                continue
-            if args.cns_constraint == "within_thresholds" and pd.notna(cns_mpo) and cns_mpo < args.cns_mpo_threshold:
-                validity_reasons.append("cns_mpo_below_threshold")
-                continue
-            generated_rows.append(row)
+                row = {
+                    "seed_id": seed["seed_id"],
+                    "seed_smiles": seed_rec.smiles,
+                    "cand_id": f"{seed['seed_id']}_r{rule['rule_id']}_{applied}",
+                    "cand_smiles": cand_rec.smiles,
+                    "rule_id": rule["rule_id"],
+                    "rule_support_count": rule.get("support_count", np.nan),
+                    "yhat_x": approx_model_yhat(pd.Series(seed_props | {"pIC50": seed.get("pIC50", np.nan)})),
+                    "yhat_xprime": approx_model_yhat(pd.Series(cand_rec.props)),
+                    "seed_cns_mpo": seed_mpo,
+                    "cand_cns_mpo": cns_mpo,
+                    "seed_cns_like": seed_cns_like,
+                    "cand_cns_like": cns_like,
+                    "tanimoto": sim,
+                    "chemical_distance": dist,
+                    **{f"cand_{k}": v for k, v in cand_rec.props.items()},
+                }
+                row["delta_yhat"] = row["yhat_xprime"] - row["yhat_x"]
+                row["delta_cns_mpo"] = cns_mpo - seed_mpo if pd.notna(cns_mpo) and pd.notna(seed_mpo) else np.nan
+                valid_rows.append(row)
+
+                if args.cns_constraint == "keep_cns_like" and seed_cns_like and not cns_like:
+                    validity_reasons.append("cns_like_not_preserved")
+                    continue
+                if args.cns_constraint == "within_thresholds" and pd.notna(cns_mpo) and cns_mpo < args.cns_mpo_threshold:
+                    validity_reasons.append("cns_mpo_below_threshold")
+                    continue
+                generated_rows.append(row)
+        total_fragment_rows += seed_fragment_rows
+        total_rule_matches += seed_rule_matches
+        print(
+            f"Seed diagnostics: seed_id={seed['seed_id']} fragment_rows={seed_fragment_rows} rule_matches={seed_rule_matches}",
+            file=sys.stderr,
+        )
 
     valid = pd.DataFrame(valid_rows)
     generated = pd.DataFrame(generated_rows)
@@ -250,7 +368,9 @@ def main() -> None:
         f"n_generated={n_generated}, "
         f"n_valid={n_valid}, "
         f"n_pass_bbb={n_pass_bbb}, "
-        f"n_ranked_topk={n_ranked_topk}",
+        f"n_ranked_topk={n_ranked_topk}, "
+        f"n_fragment_rows={total_fragment_rows}, "
+        f"n_rule_matches={total_rule_matches}",
         file=sys.stderr,
     )
 
