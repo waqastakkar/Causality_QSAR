@@ -38,7 +38,8 @@ if [[ ! -f "$RULES_PARQUET" ]]; then
 fi
 
 CMD=("$PYTHON_BIN" "scripts/generate_counterfactuals.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--dataset_parquet" "$DATASET_PARQUET" "--mmp_rules_parquet" "$RULES_PARQUET" "--outdir" "$STEP_OUT")
-if [[ -f "$OUTPUTS_ROOT/step3/bbb_annotations.parquet" ]]; then CMD+=("--bbb_parquet" "$OUTPUTS_ROOT/step3/bbb_annotations.parquet"); fi
+BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
+if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
 if [[ -n "$CNS_MPO" ]]; then CMD+=("--cns_mpo_threshold" "$CNS_MPO"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD

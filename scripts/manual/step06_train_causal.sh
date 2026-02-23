@@ -22,7 +22,8 @@ LOG_FILE="$STEP_OUT/step06_train_causal.log"
 mkdir -p "$STEP_OUT"
 CMD=("$PYTHON_BIN" "scripts/train_causal_qsar.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL" "--epochs" "$EPOCHS" "--early_stopping_patience" "$PATIENCE")
 if [[ -n "$SEED1" ]]; then CMD+=("--seed" "$SEED1"); fi
-if [[ -f "$OUTPUTS_ROOT/step3/bbb_annotations.parquet" ]]; then CMD+=("--bbb_parquet" "$OUTPUTS_ROOT/step3/bbb_annotations.parquet"); fi
+BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
+if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"

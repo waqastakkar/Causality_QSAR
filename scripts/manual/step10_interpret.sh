@@ -33,7 +33,8 @@ if [[ -z "$RUN_DIR" || ! -f "$DATASET_PARQUET" ]]; then
   exit 0
 fi
 CMD=("$PYTHON_BIN" "scripts/interpret_model.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--dataset_parquet" "$DATASET_PARQUET" "--outdir" "$STEP_OUT")
-if [[ -f "$OUTPUTS_ROOT/step3/bbb_annotations.parquet" ]]; then CMD+=("--bbb_parquet" "$OUTPUTS_ROOT/step3/bbb_annotations.parquet"); fi
+BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
+if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
 if [[ -f "$OUTPUTS_ROOT/step7/candidates/ranked_topk.parquet" ]]; then CMD+=("--counterfactuals_parquet" "$OUTPUTS_ROOT/step7/candidates/ranked_topk.parquet"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD

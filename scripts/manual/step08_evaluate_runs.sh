@@ -16,7 +16,8 @@ OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; TASK="${CFG[2]}"; LABEL_COL="${CFG
 RUNS_ROOT="$OUTPUTS_ROOT/step6/$TARGET"; [[ -d "$RUNS_ROOT" ]] || RUNS_ROOT="$OUTPUTS_ROOT/step5/$TARGET"
 STEP_OUT="$OUTPUTS_ROOT/step8"; LOG_FILE="$STEP_OUT/step08_evaluate_runs.log"; mkdir -p "$STEP_OUT"
 CMD=("$PYTHON_BIN" "scripts/evaluate_runs.py" "--target" "$TARGET" "--runs_root" "$RUNS_ROOT" "--splits_dir" "$OUTPUTS_ROOT/step4" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL")
-if [[ -f "$OUTPUTS_ROOT/step3/bbb_annotations.parquet" ]]; then CMD+=("--bbb_parquet" "$OUTPUTS_ROOT/step3/bbb_annotations.parquet"); fi
+BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
+if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"

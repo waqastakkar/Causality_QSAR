@@ -46,7 +46,8 @@ if [[ -z "$RUN_DIR" || -z "$EXTERNAL_PARQUET" ]]; then
   exit 0
 fi
 CMD=("$PYTHON_BIN" "scripts/evaluate_cross_endpoint.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--external_parquet" "$EXTERNAL_PARQUET" "--outdir" "$STEP_OUT")
-if [[ -f "$OUTPUTS_ROOT/step3/bbb_annotations.parquet" ]]; then CMD+=("--bbb_parquet" "$OUTPUTS_ROOT/step3/bbb_annotations.parquet"); fi
+BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
+if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
