@@ -7,7 +7,6 @@ import json
 import platform
 import subprocess
 import sys
-import warnings
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,18 +63,24 @@ def _collect_rules_from_fragment_rows(
     return rules
 
 
-def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str, str, str]], int, str]:
+def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str, str, str]], int, int, str]:
     from rdkit import Chem
     from rdkit.Chem import rdMMPA
 
     fragment_rows: list[tuple[str, str]] = []
     n_valid_molecules = 0
+    n_fragmentable_molecules = 0
     for smi in smiles:
         mol = Chem.MolFromSmiles(smi) if isinstance(smi, str) else None
         if mol is None:
             continue
         n_valid_molecules += 1
-        for row in rdMMPA.FragmentMol(mol, maxCuts=max_cut_bonds, maxCutBonds=max_cut_bonds, resultsAsMols=False):
+        mol_fragments = list(
+            rdMMPA.FragmentMol(mol, maxCuts=max_cut_bonds, maxCutBonds=max_cut_bonds, resultsAsMols=False)
+        )
+        if mol_fragments:
+            n_fragmentable_molecules += 1
+        for row in mol_fragments:
             if not isinstance(row, tuple) or len(row) < 2:
                 continue
             fragment_rows.append((str(row[0]), str(row[1])))
@@ -83,8 +88,8 @@ def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str
     rules_default = _collect_rules_from_fragment_rows(fragment_rows, swap_order=False)
     rules_swapped = _collect_rules_from_fragment_rows(fragment_rows, swap_order=True)
     if len(rules_swapped) > len(rules_default):
-        return rules_swapped, n_valid_molecules, "swapped"
-    return rules_default, n_valid_molecules, "default"
+        return rules_swapped, n_valid_molecules, n_fragmentable_molecules, "swapped"
+    return rules_default, n_valid_molecules, n_fragmentable_molecules, "default"
 
 
 def main() -> None:
@@ -120,11 +125,16 @@ def main() -> None:
     series_col = pick_col(df, ["series_id", "series", "scaffold_id"], required=False)
 
     input_smiles = df[smi_col].dropna().astype(str).tolist()
-    rules_raw, n_valid_molecules, tuple_order = extract_rules(input_smiles, args.max_cut_bonds)
+    rules_raw, n_valid_molecules, n_fragmentable_molecules, tuple_order = extract_rules(input_smiles, args.max_cut_bonds)
+    print(f"n_input_rows={len(df)}", file=sys.stderr)
+    print(f"n_valid_rdkit_mols={n_valid_molecules}", file=sys.stderr)
+    print(f"n_fragmentable_mols={n_fragmentable_molecules}", file=sys.stderr)
+    print(f"n_candidate_pairs_before_support_filter={len(rules_raw)}", file=sys.stderr)
     print(
         "Rule extraction diagnostics: "
         f"n_molecules_loaded={len(input_smiles)}, "
         f"n_valid_rdkit_molecules={n_valid_molecules}, "
+        f"n_fragmentable_molecules={n_fragmentable_molecules}, "
         f"n_candidate_pairs_pre_aggregation={len(rules_raw)}, "
         f"tuple_order_selected={tuple_order}",
         file=sys.stderr,
@@ -153,20 +163,21 @@ def main() -> None:
     rows = build_rows(args.min_support)
     n_rules_raw = len(counter)
     n_rules_after_min_support = len(rows)
-    effective_min_support = args.min_support
-    fallback_applied = False
-    fallback_message = ""
+    min_support_used = args.min_support
+    print(f"n_rules_raw={n_rules_raw}", file=sys.stderr)
     if n_rules_raw == 0:
-        warnings.warn(
-            "n_rules_raw=0. No raw MMP pairs were extracted. "
-            "This is not fixed by min_support. Check RDKit MMPA availability and input standardization."
+        raise SystemExit(
+            "n_rules_raw=0. No raw MMP rules were extracted before support filtering. "
+            f"n_valid_rdkit_mols={n_valid_molecules}, "
+            f"n_fragmentable_mols={n_fragmentable_molecules}. "
+            "Check input chemistry quality and rdMMPA fragmentation settings."
         )
 
     print(
         "Rule extraction counts: "
         f"n_rules_raw={n_rules_raw}, "
         f"n_rules_after_min_support={n_rules_after_min_support}, "
-        f"min_support_used={effective_min_support}",
+        f"min_support_used={min_support_used}",
         file=sys.stderr,
     )
     rules_df = pd.DataFrame(rows).sort_values("support_count", ascending=False) if rows else pd.DataFrame(columns=[
@@ -189,9 +200,6 @@ def main() -> None:
                 "n_rules_after_min_support",
                 "requested_min_support",
                 "min_support_used",
-                "effective_min_support",
-                "fallback_applied",
-                "fallback_note",
                 "max_cut_bonds",
             ],
             "value": [
@@ -202,10 +210,7 @@ def main() -> None:
                 n_rules_raw,
                 n_rules_after_min_support,
                 args.min_support,
-                effective_min_support,
-                effective_min_support,
-                int(fallback_applied),
-                fallback_message or "none",
+                min_support_used,
                 args.max_cut_bonds,
             ],
         }
@@ -244,9 +249,7 @@ def main() -> None:
         "input_dataset_hash": sha256_file(Path(args.input_parquet)),
         "n_rules": int(len(rules_df)),
         "requested_min_support": int(args.min_support),
-        "effective_min_support": int(effective_min_support),
-        "fallback_applied": bool(fallback_applied),
-        "fallback_note": fallback_message or None,
+        "min_support_used": int(min_support_used),
     }
     prov_path.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
     print(f"Wrote rules to {rules_path}")
