@@ -408,11 +408,22 @@ def main() -> None:
 
     fig, ax = plt.subplots(figsize=(6, 4))
     cf_df = pd.DataFrame(cf_rows)
+    pareto_xlabel = "Fraction positive Δŷ"
     if cf_df is None or cf_df.empty:
         print("WARNING: fig_pareto_potency_vs_cns skipped (counterfactual metrics unavailable).")
+    elif "delta_std" not in cf_df.columns:
+        print("WARNING: fig_pareto_potency_vs_cns skipped (missing column: delta_std).")
     elif args.task == "regression":
-        # Classification-style Pareto axes are not guaranteed in regression outputs.
-        print("WARNING: fig_pareto_potency_vs_cns skipped (task is regression).")
+        safe_x_candidates = ["mean_delta", "delta_mean", "delta_yhat_mean"]
+        safe_x_col = next((c for c in safe_x_candidates if c in cf_df.columns), None)
+        if safe_x_col is None:
+            print(
+                "WARNING: fig_pareto_potency_vs_cns skipped "
+                "(regression task with no safe x-axis column)."
+            )
+        else:
+            pareto_xlabel = safe_x_col
+            ax.scatter(cf_df[safe_x_col], cf_df["delta_std"], alpha=0.7)
     else:
         required = ["fraction_positive", "delta_std"]
         missing = [c for c in required if c not in cf_df.columns]
@@ -423,7 +434,7 @@ def main() -> None:
             )
         else:
             ax.scatter(cf_df["fraction_positive"], cf_df["delta_std"], alpha=0.7)
-    style_axis(ax, style, "Pareto: Potency vs CNS", "Fraction positive Δŷ", "Δŷ std")
+    style_axis(ax, style, "Pareto: Potency vs CNS", pareto_xlabel, "Δŷ std")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pareto_potency_vs_cns.svg"); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))
