@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import subprocess
 import sys
@@ -36,7 +37,7 @@ def _collect_rules_from_fragment_rows(
     fragment_rows: list[tuple[str, str]],
     *,
     swap_order: bool,
-) -> list[tuple[str, str, str]]:
+) -> tuple[list[tuple[str, str, str]], dict[str, list[str]]]:
     """Aggregate fragment rows into directional rules.
 
     RDKit MMPA tuple ordering can vary across builds. ``swap_order`` allows
@@ -60,10 +61,15 @@ def _collect_rules_from_fragment_rows(
                 if i == j:
                     continue
                 rules.append((uniq[i], uniq[j], core))
-    return rules
+    return rules, by_core
 
 
-def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str, str, str]], int, int, str]:
+def extract_rules(
+    smiles: list[str],
+    max_cuts: int,
+    max_cut_bonds: int,
+    pattern: str,
+) -> tuple[list[tuple[str, str, str]], int, int, str, int, int, int]:
     from rdkit import Chem
     from rdkit.Chem import rdMMPA
 
@@ -76,7 +82,13 @@ def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str
             continue
         n_valid_molecules += 1
         mol_fragments = list(
-            rdMMPA.FragmentMol(mol, maxCuts=max_cut_bonds, maxCutBonds=max_cut_bonds, resultsAsMols=False)
+            rdMMPA.FragmentMol(
+                mol,
+                maxCuts=max_cuts,
+                maxCutBonds=max_cut_bonds,
+                pattern=pattern,
+                resultsAsMols=False,
+            )
         )
         if mol_fragments:
             n_fragmentable_molecules += 1
@@ -85,11 +97,52 @@ def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str
                 continue
             fragment_rows.append((str(row[0]), str(row[1])))
 
-    rules_default = _collect_rules_from_fragment_rows(fragment_rows, swap_order=False)
-    rules_swapped = _collect_rules_from_fragment_rows(fragment_rows, swap_order=True)
+    rules_default, by_core_default = _collect_rules_from_fragment_rows(fragment_rows, swap_order=False)
+    rules_swapped, by_core_swapped = _collect_rules_from_fragment_rows(fragment_rows, swap_order=True)
     if len(rules_swapped) > len(rules_default):
-        return rules_swapped, n_valid_molecules, n_fragmentable_molecules, "swapped"
-    return rules_default, n_valid_molecules, n_fragmentable_molecules, "default"
+        n_unique_cores = len(by_core_swapped)
+        n_cores_with_2plus = sum(1 for sides in by_core_swapped.values() if len(set(sides)) >= 2)
+        return (
+            rules_swapped,
+            n_valid_molecules,
+            n_fragmentable_molecules,
+            "swapped",
+            len(fragment_rows),
+            n_unique_cores,
+            n_cores_with_2plus,
+        )
+    n_unique_cores = len(by_core_default)
+    n_cores_with_2plus = sum(1 for sides in by_core_default.values() if len(set(sides)) >= 2)
+    return (
+        rules_default,
+        n_valid_molecules,
+        n_fragmentable_molecules,
+        "default",
+        len(fragment_rows),
+        n_unique_cores,
+        n_cores_with_2plus,
+    )
+
+
+def run_selftest_if_requested(args: argparse.Namespace) -> None:
+    if os.getenv("MMPA_SELFTEST") != "1":
+        return
+    import pandas as pd
+
+    df = pd.read_parquet(args.input_parquet)
+    smi_col = pick_col(df, ["canonical_smiles", "smiles"])
+    sample_smiles = df[smi_col].dropna().astype(str).head(200).tolist()
+    rules_raw, *_ = extract_rules(
+        sample_smiles,
+        max_cuts=1,
+        max_cut_bonds=20,
+        pattern="[!#1]!@!=!#[!#1]",
+    )
+    if len(rules_raw) == 0:
+        raise SystemExit(
+            "MMPA self-test failed: 0 rules from first 200 molecules. "
+            "Adjust --max_cut_bonds and/or --cut_pattern fragmentation settings."
+        )
 
 
 def main() -> None:
@@ -98,7 +151,9 @@ def main() -> None:
     parser.add_argument("--input_parquet", required=True)
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--min_support", type=int, default=3)
-    parser.add_argument("--max_cut_bonds", type=int, default=1)
+    parser.add_argument("--max_cuts", type=int, default=1)
+    parser.add_argument("--max_cut_bonds", type=int, default=20)
+    parser.add_argument("--cut_pattern", type=str, default="[!#1]!@!=!#[!#1]")
     add_plot_style_args(parser)
     args = parser.parse_args()
     try:
@@ -113,6 +168,8 @@ def main() -> None:
             "Install a full RDKit build that includes rdMMPA, or use a fallback rule generator."
         ) from e
 
+    run_selftest_if_requested(args)
+
     outdir = Path(args.outdir)
     rules_dir = outdir / "rules"
     fig_dir = outdir / "figures"
@@ -125,7 +182,20 @@ def main() -> None:
     series_col = pick_col(df, ["series_id", "series", "scaffold_id"], required=False)
 
     input_smiles = df[smi_col].dropna().astype(str).tolist()
-    rules_raw, n_valid_molecules, n_fragmentable_molecules, tuple_order = extract_rules(input_smiles, args.max_cut_bonds)
+    (
+        rules_raw,
+        n_valid_molecules,
+        n_fragmentable_molecules,
+        tuple_order,
+        n_fragment_rows,
+        n_unique_cores,
+        n_cores_with_2plus,
+    ) = extract_rules(
+        input_smiles,
+        max_cuts=args.max_cuts,
+        max_cut_bonds=args.max_cut_bonds,
+        pattern=args.cut_pattern,
+    )
     print(f"n_input_rows={len(df)}", file=sys.stderr)
     print(f"n_valid_rdkit_mols={n_valid_molecules}", file=sys.stderr)
     print(f"n_fragmentable_mols={n_fragmentable_molecules}", file=sys.stderr)
@@ -135,6 +205,9 @@ def main() -> None:
         f"n_molecules_loaded={len(input_smiles)}, "
         f"n_valid_rdkit_molecules={n_valid_molecules}, "
         f"n_fragmentable_molecules={n_fragmentable_molecules}, "
+        f"n_fragment_rows={n_fragment_rows}, "
+        f"n_unique_cores={n_unique_cores}, "
+        f"n_cores_with_2plus={n_cores_with_2plus}, "
         f"n_candidate_pairs_pre_aggregation={len(rules_raw)}, "
         f"tuple_order_selected={tuple_order}",
         file=sys.stderr,
@@ -200,7 +273,9 @@ def main() -> None:
                 "n_rules_after_min_support",
                 "requested_min_support",
                 "min_support_used",
+                "max_cuts",
                 "max_cut_bonds",
+                "cut_pattern",
             ],
             "value": [
                 len(df),
@@ -211,7 +286,9 @@ def main() -> None:
                 n_rules_after_min_support,
                 args.min_support,
                 min_support_used,
+                args.max_cuts,
                 args.max_cut_bonds,
+                args.cut_pattern,
             ],
         }
     )
