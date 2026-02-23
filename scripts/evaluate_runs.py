@@ -408,8 +408,21 @@ def main() -> None:
 
     fig, ax = plt.subplots(figsize=(6, 4))
     cf_df = pd.DataFrame(cf_rows)
-    if not cf_df.empty:
-        ax.scatter(cf_df["fraction_positive"], cf_df["delta_std"], alpha=0.7)
+    if cf_df is None or cf_df.empty:
+        print("WARNING: fig_pareto_potency_vs_cns skipped (counterfactual metrics unavailable).")
+    elif args.task == "regression":
+        # Classification-style Pareto axes are not guaranteed in regression outputs.
+        print("WARNING: fig_pareto_potency_vs_cns skipped (task is regression).")
+    else:
+        required = ["fraction_positive", "delta_std"]
+        missing = [c for c in required if c not in cf_df.columns]
+        if missing:
+            print(
+                "WARNING: fig_pareto_potency_vs_cns skipped "
+                f"(missing columns: {', '.join(missing)})."
+            )
+        else:
+            ax.scatter(cf_df["fraction_positive"], cf_df["delta_std"], alpha=0.7)
     style_axis(ax, style, "Pareto: Potency vs CNS", "Fraction positive Δŷ", "Δŷ std")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pareto_potency_vs_cns.svg"); plt.close(fig)
 
