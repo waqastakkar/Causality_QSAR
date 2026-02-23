@@ -93,6 +93,16 @@ def _resolve_first_run_dir(runs_root: Path) -> Path | None:
     return run_candidates[0].parent.parent
 
 
+def _resolve_step3_bbb_parquet(out_root: Path) -> Path | None:
+    """Return step3 BBB annotations path, supporting both legacy and current layouts."""
+
+    candidates = [
+        out_root / "step3" / "data" / "bbb_annotations.parquet",
+        out_root / "step3" / "bbb_annotations.parquet",
+    ]
+    return next((path for path in candidates if path.exists()), None)
+
+
 def _default_builder(script_name: str, include_style: bool = False) -> StepBuilder:
     def _build(config: dict[str, Any], overrides: dict[str, Any]) -> list[str]:
         cmd = [_python_bin(config), str(Path("scripts") / script_name)]
@@ -194,8 +204,8 @@ def _step7_generate_counterfactuals_builder(config: dict[str, Any], overrides: d
         str(step7_out),
     ]
 
-    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
-    if bbb_parquet.exists():
+    bbb_parquet = _resolve_step3_bbb_parquet(out_root)
+    if bbb_parquet is not None:
         generate_cmd.extend(["--bbb_parquet", str(bbb_parquet)])
 
     screening_cfg = config.get("screening", {})
@@ -239,7 +249,7 @@ def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, A
     step6_runs_root = out_root / "step6" / str(config["target"])
     step5_runs_root = out_root / "step5" / str(config["target"])
     step8_out = out_root / "step8"
-    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+    bbb_parquet = _resolve_step3_bbb_parquet(out_root)
     training = config.get("training", {})
     runs_root = step6_runs_root if step6_runs_root.exists() else step5_runs_root
 
@@ -263,7 +273,7 @@ def _step8_evaluate_model_builder(config: dict[str, Any], overrides: dict[str, A
         "--env_col",
         str(training.get("env_col", "env_id_manual")),
     ]
-    if bbb_parquet.exists():
+    if bbb_parquet is not None:
         cmd.extend(["--bbb_parquet", str(bbb_parquet)])
 
     cmd.extend(_style_flags(config))
@@ -305,8 +315,8 @@ def _step6_train_exact_objective_builder(config: dict[str, Any], overrides: dict
     if isinstance(seeds, list) and seeds:
         cmd.extend(["--seed", str(seeds[0])])
 
-    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
-    if bbb_parquet.exists():
+    bbb_parquet = _resolve_step3_bbb_parquet(out_root)
+    if bbb_parquet is not None:
         cmd.extend(["--bbb_parquet", str(bbb_parquet)])
 
     cmd.extend(_style_flags(config))
@@ -320,7 +330,7 @@ def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: di
     step6_runs_root = out_root / "step6" / str(config["target"])
     step5_runs_root = out_root / "step5" / str(config["target"])
     step9_out = out_root / "step9"
-    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+    bbb_parquet = _resolve_step3_bbb_parquet(out_root)
 
     external_candidates = [
         Path("data/external/processed") / f"{str(config['target']).lower()}_inhibition" / "data" / "inhibition_external_final.parquet",
@@ -358,7 +368,7 @@ def _step9_evaluate_cross_endpoint_builder(config: dict[str, Any], overrides: di
         "--outdir",
         str(step9_out),
     ]
-    if bbb_parquet.exists():
+    if bbb_parquet is not None:
         cmd.extend(["--bbb_parquet", str(bbb_parquet)])
 
     cmd.extend(_style_flags(config))
@@ -374,7 +384,7 @@ def _step10_interpret_model_builder(config: dict[str, Any], overrides: dict[str,
     step5_runs_root = out_root / "step5" / str(config["target"])
     step7_counterfactuals = out_root / "step7" / "candidates" / "ranked_topk.parquet"
     step10_out = out_root / "step10"
-    bbb_parquet = out_root / "step3" / "bbb_annotations.parquet"
+    bbb_parquet = _resolve_step3_bbb_parquet(out_root)
 
     run_dir = _resolve_first_run_dir(step6_runs_root) or _resolve_first_run_dir(step5_runs_root)
 
@@ -406,7 +416,7 @@ def _step10_interpret_model_builder(config: dict[str, Any], overrides: dict[str,
         "--outdir",
         str(step10_out),
     ]
-    if bbb_parquet.exists():
+    if bbb_parquet is not None:
         cmd.extend(["--bbb_parquet", str(bbb_parquet)])
     if step7_counterfactuals.exists():
         cmd.extend(["--counterfactuals_parquet", str(step7_counterfactuals)])
