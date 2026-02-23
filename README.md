@@ -9,7 +9,7 @@ Compared with many conventional QSAR workflows, this pipeline emphasizes:
 - explicit environment-aware splitting and validation,
 - provenance-first execution (run manifests, hashes, environment capture),
 - integrated manuscript pack generation,
-- one unified CLI (`ptp1bqsar`) for steps 0–15.
+- explicit manual step scripts for transparent step-by-step execution (`scripts/manual/*.sh`).
 
 ## Table of Contents
 
@@ -20,12 +20,10 @@ Compared with many conventional QSAR workflows, this pipeline emphasizes:
   - [Installation](#installation)
   - [Configuration](#configuration)
   - [Usage](#usage)
-    - [Unified CLI](#unified-cli)
-    - [Check configuration](#check-configuration)
-    - [Run entire pipeline (Steps 0–15)](#run-entire-pipeline-steps-015)
-    - [Run specific steps](#run-specific-steps)
-    - [Manuscript builder](#manuscript-builder)
-    - [Step catalog (0–15)](#step-catalog-015)
+    - [Manual step-by-step execution (recommended)](#manual-step-by-step-execution-recommended)
+    - [Manual step commands (copy/paste)](#manual-step-commands-copypaste)
+    - [Step catalog (manual mode)](#step-catalog-manual-mode)
+    - [CLI status (deprecated)](#cli-status-deprecated)
   - [Output folders and file explanations](#output-folders-and-file-explanations)
   - [Reproducibility](#reproducibility)
   - [Example end-to-end workflow](#example-end-to-end-workflow)
@@ -37,7 +35,7 @@ Compared with many conventional QSAR workflows, this pipeline emphasizes:
 
 ## Features
 
-- Unified orchestration CLI for checking, single-step runs, range runs, and manuscript assembly.
+- Explicit manual orchestration scripts for single-step, range, and full pipeline execution.
 - Stepwise pipeline for extraction, processing, environment construction, training, evaluation, and screening.
 - Causal-QSAR orientation: environment shift diagnostics and robustness analysis.
 - Counterfactual generation for molecule-level what-if analysis.
@@ -145,84 +143,91 @@ screening:
 
 ## Usage
 
-### Unified CLI
+### Manual step-by-step execution (recommended)
+
+> The unified CLI is now **deprecated for day-to-day execution**. Prefer the explicit bash scripts in `scripts/manual/`.
+
+1. Ensure scripts are executable:
 
 ```bash
-ptp1bqsar --help
+chmod +x scripts/manual/*.sh
 ```
 
-Shows commands for `check`, `step`, `run`, and `manuscript`.
-
-### Check configuration
+2. Optionally pin interpreter used by all manual scripts:
 
 ```bash
-ptp1bqsar check --config configs/ptp1b.yaml
+export PIPELINE_PYTHON=/path/to/python
 ```
 
-Validates schema, key paths, script availability, and RDKit import readiness.
-
-### Run entire pipeline (Steps 0–15)
+3. Run a single step:
 
 ```bash
-ptp1bqsar run --config configs/ptp1b.yaml --steps 0-15
+bash scripts/manual/step01_extract.sh configs/ptp1b.yaml
 ```
 
-Runs the complete workflow end to end. Step 0 is orchestration/checkpoint context; executable pipeline scripts map to Steps 1–15.
-
-### Run specific steps
-
-Step 1 (extract target data from ChEMBL SQLite):
+4. Run all steps in sequence:
 
 ```bash
-ptp1bqsar step 1 --config configs/ptp1b.yaml
+bash scripts/manual/run_all.sh configs/ptp1b.yaml
 ```
 
-Step 5 (model training benchmark):
+5. Run a subset of steps (range via env or arg):
 
 ```bash
-ptp1bqsar step 5 --config configs/ptp1b.yaml
+STEPS=1-10 bash scripts/manual/run_all.sh configs/ptp1b.yaml
+bash scripts/manual/run_all.sh configs/ptp1b.yaml 5-8
 ```
 
-Step 12 (screening):
+6. Pass extra per-step overrides (converted from `KEY=VALUE` to `--KEY VALUE`):
 
 ```bash
-ptp1bqsar step 12 --config configs/ptp1b.yaml
+bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml training.epochs=50
+bash scripts/manual/step07_counterfactuals.sh configs/ptp1b.yaml cns_mpo_threshold=4.5
 ```
 
-You can also run ranges and mixed selections:
+### Manual step commands (copy/paste)
 
 ```bash
-ptp1bqsar run --config configs/ptp1b.yaml --steps "1-4,8,10-15"
+bash scripts/manual/step01_extract.sh configs/ptp1b.yaml
+bash scripts/manual/step02_postprocess.sh configs/ptp1b.yaml
+bash scripts/manual/step03_assemble_environments.sh configs/ptp1b.yaml
+bash scripts/manual/step04_generate_splits.sh configs/ptp1b.yaml
+bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml
+bash scripts/manual/step06_train_causal.sh configs/ptp1b.yaml
+bash scripts/manual/step07_counterfactuals.sh configs/ptp1b.yaml
+bash scripts/manual/step08_evaluate_runs.sh configs/ptp1b.yaml
+bash scripts/manual/step09_cross_endpoint.sh configs/ptp1b.yaml
+bash scripts/manual/step10_interpret.sh configs/ptp1b.yaml
+bash scripts/manual/step11_robustness.sh configs/ptp1b.yaml
+bash scripts/manual/step12_screen_library.sh configs/ptp1b.yaml
+bash scripts/manual/step13_analyze_screening.sh configs/ptp1b.yaml
+bash scripts/manual/step14_match_features.sh configs/ptp1b.yaml
+bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 ```
 
-### Manuscript builder
+### Step catalog (manual mode)
 
-```bash
-ptp1bqsar manuscript --config configs/ptp1b.yaml --paper_id ptp1b_causal_qsar_v1
-```
+| Step | Script | Main input(s) | Main output(s) |
+|---|---|---|---|
+| 1 | `step01_extract.sh` | `paths.chembl_sqlite` | `outputs/step1/<target>_qsar_ready.csv` |
+| 2 | `step02_postprocess.sh` | `outputs/step1/<target>_qsar_ready.csv` | `outputs/step2/*` |
+| 3 | `step03_assemble_environments.sh` | step1/step2 CSVs + env rules | `outputs/step3/multienv_compound_level.parquet` |
+| 4 | `step04_generate_splits.sh` | config + step3 dataset | `outputs/step4/*` |
+| 5 | `step05_benchmark.sh` | step3 dataset + step4 splits | `outputs/step5/<target>/*` |
+| 6 | `step06_train_causal.sh` | step3 dataset + step4 splits | `outputs/step6/<target>/*` |
+| 7 | `step07_counterfactuals.sh` | run dir + step3 parquet + MMP rules | `outputs/step7/candidates/*.parquet` |
+| 8 | `step08_evaluate_runs.sh` | runs root + step3/step4 | `outputs/step8/*` |
+| 9 | `step09_cross_endpoint.sh` | run checkpoint + external parquet | `outputs/step9/*` or `step9_noop.txt` |
+| 10 | `step10_interpret.sh` | run checkpoint + step3 parquet | `outputs/step10/*` or `step10_noop.txt` |
+| 11 | `step11_robustness.sh` | config | `outputs/step11/*` |
+| 12 | `step12_screen_library.sh` | config + screening inputs | `outputs/step12/*` |
+| 13 | `step13_analyze_screening.sh` | config + step12 outputs | `outputs/step13/*` |
+| 14 | `step14_match_features.sh` | config + step13 outputs | `outputs/step14/*` |
+| 15 | `step15_manuscript.sh` | config + previous outputs | `outputs/step15/*` |
 
-Runs manuscript packaging logic (Step 15) with a specified paper identifier.
+### CLI status (deprecated)
 
-### Step catalog (0–15)
-
-| Step | Name | Purpose |
-|---|---|---|
-| 0 | unified orchestration | Common entrypoint and run bookkeeping |
-| 1 | `extract_chembl36_sqlite` | Extract target-linked bioactivity records |
-| 2 | `qsar_postprocess` | Convert to QSAR-ready tables and summary outputs |
-| 3 | `assemble_environments` | Build multi-environment datasets for shift-aware analysis |
-| 4 | `generate_splits` | Create train/validation/test splits |
-| 5 | `run_benchmark` | Train baseline/benchmark models |
-| 6 | `reserved_step6` | Reserved no-op placeholder |
-| 7 | `generate_counterfactuals` | Generate structural counterfactual proposals |
-| 8 | `evaluate_model` | Evaluate predictive performance |
-| 9 | `evaluate_cross_endpoint` | Cross-endpoint generalization analysis |
-| 10 | `interpret_model` | Interpretability artifacts |
-| 11 | `evaluate_robustness` | Robustness/conformal/AD diagnostics |
-| 12 | `screen_library` | Virtual screening of external libraries |
-| 13 | `analyze_screening` | Post-screening ranking and report analytics |
-| 14 | `match_screening_features` | Feature-level match and enrichment analysis |
-| 15 | `build_manuscript_pack` | Build publication-ready artifact bundle |
+The old `ptp1bqsar` CLI (`check`, `step`, `run`, `manuscript`) remains in the codebase for compatibility, but new documentation and recommended execution now use `scripts/manual/*.sh`.
 
 ## Output folders and file explanations
 
@@ -276,25 +281,26 @@ Best practice:
 
 1. Create/activate environment and install package.
 2. Prepare `configs/ptp1b.yaml` and ensure `paths.chembl_sqlite` points to your local ChEMBL SQLite.
-3. Validate setup:
+3. Make manual scripts executable and set interpreter (optional):
 
 ```bash
-ptp1bqsar check --config configs/ptp1b.yaml --steps 0-15
+chmod +x scripts/manual/*.sh
+export PIPELINE_PYTHON=$(which python)
 ```
 
 4. Execute all steps:
 
 ```bash
-ptp1bqsar run --config configs/ptp1b.yaml --steps 0-15
+bash scripts/manual/run_all.sh configs/ptp1b.yaml
 ```
 
-5. Build manuscript package with a custom identifier:
+5. Execute a focused range when iterating:
 
 ```bash
-ptp1bqsar manuscript --config configs/ptp1b.yaml --paper_id hfintl_ptp1b_v1
+STEPS=5-10 bash scripts/manual/run_all.sh configs/ptp1b.yaml
 ```
 
-6. Review artifacts under `outputs/pipeline_runs/<pipeline_run_id>/` and step-specific output directories.
+6. Review artifacts under `outputs/step*/` and step-specific log files (`outputs/stepX/stepXX_*.log`).
 
 ## Troubleshooting
 
@@ -304,6 +310,7 @@ ptp1bqsar manuscript --config configs/ptp1b.yaml --paper_id hfintl_ptp1b_v1
 | `ModuleNotFoundError: No module named 'torch_geometric'` | PyG dependency missing in active env | Install dependencies from `environment.yml` (or `pip install -r requirements.txt`), then re-run Step 5+ |
 | Missing script error for a step | Incomplete checkout or path issue | Confirm repository integrity and run from repo root |
 | `Required path does not exist` warnings | Dataset paths not prepared | Create folders/data files referenced by config |
+| `outputs_root` is missing or empty | `paths.outputs_root` is unset/wrong or not writable | Set `paths.outputs_root` in config and confirm write permissions; scripts auto-create step subfolders with `mkdir -p` |
 | CUDA unavailable | GPU runtime package mismatch | Use `pytorch-cuda` version compatible with your driver per `environment.yml` comments |
 | Manuscript build missing files | Upstream steps incomplete | Re-run required upstream steps or full `0-15` range |
 
