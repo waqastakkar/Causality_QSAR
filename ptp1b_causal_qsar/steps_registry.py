@@ -296,9 +296,9 @@ def _step6_train_exact_objective_builder(config: dict[str, Any], overrides: dict
         "--env_col",
         str(training.get("env_col", "env_id_manual")),
         "--epochs",
-        str(training.get("epochs", 20)),
+        str(training.get("epochs", 300)),
         "--early_stopping_patience",
-        str(training.get("early_stopping_patience", 10)),
+        str(training.get("early_stopping_patience", 30)),
     ]
 
     seeds = training.get("seeds")

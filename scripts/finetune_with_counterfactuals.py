@@ -32,7 +32,7 @@ def main() -> None:
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--lambda_cf", type=float, default=0.2)
     parser.add_argument("--cf_mode", default="ranking+monotonic+smooth")
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--lr", type=float, default=5e-5)
     parser.add_argument("--seed", type=int, default=42)
     add_plot_style_args(parser)
