@@ -54,16 +54,36 @@ def _collect_rules_from_fragment_rows(
     return rules, by_core
 
 
-def parse_fragment_tuple(row: tuple[object, ...], chem_module) -> tuple[str, str] | None:
+def parse_fragment_tuple(row, Chem):
     """Parse rdMMPA.FragmentMol output row into (core, sidechain).
 
-    The tuple layout can vary by RDKit build, so we search all elements and pick
-    the two best fragment-like candidates. Core is chosen as the longer string.
+    Handles common RDKit output where row is ('', 'fragA.fragB').
     """
+    # Case 1: RDKit returns ('', 'fragA.fragB') where both fragments are packed in row[1]
+    try:
+        if (
+            isinstance(row, tuple)
+            and len(row) == 2
+            and str(row[0]).strip() == ""
+            and "." in str(row[1])
+        ):
+            packed = str(row[1]).strip()
+            parts = [p.strip() for p in packed.split(".") if p.strip()]
+            if len(parts) >= 2:
+                # Prefer fragments containing attachment points, then longer strings
+                parts.sort(key=lambda s: (("*" in s), len(s)), reverse=True)
+                a, b = parts[0], parts[1]
+                if a != b:
+                    core, side = (a, b) if len(a) >= len(b) else (b, a)
+                    return core, side
+            return None
+    except Exception:
+        pass
 
+    # Case 2: General fallback: select two best fragment-like strings from the tuple
     def _is_valid_fragment_smiles(text: str) -> bool:
         try:
-            return bool(text) and chem_module.MolFromSmiles(text) is not None
+            return bool(text) and Chem.MolFromSmiles(text) is not None
         except Exception:
             return False
 
@@ -79,20 +99,20 @@ def parse_fragment_tuple(row: tuple[object, ...], chem_module) -> tuple[str, str
             score -= 6
         return score
 
-    values = [str(value).strip() for value in row]
-    candidates: list[tuple[int, int, str]] = []
-    for value in values:
-        if not value:
+    values = []
+    try:
+        values = [str(v).strip() for v in row]
+    except Exception:
+        return None
+
+    candidates = []
+    for v in values:
+        if not v:
             continue
-        looks_like_fragment = (
-            "*" in value
-            or ("." in value and "*" in value)
-            or _is_valid_fragment_smiles(value)
-        )
+        looks_like_fragment = ("*" in v) or _is_valid_fragment_smiles(v)
         if not looks_like_fragment:
             continue
-        score = _score_candidate(value)
-        candidates.append((score, len(value), value))
+        candidates.append((_score_candidate(v), len(v), v))
 
     if len(candidates) < 2:
         return None
@@ -100,16 +120,17 @@ def parse_fragment_tuple(row: tuple[object, ...], chem_module) -> tuple[str, str
     candidates.sort(reverse=True)
     frag_a = candidates[0][2]
     frag_b = candidates[1][2]
+
     if frag_a == frag_b:
-        for _, _, value in candidates[2:]:
-            if value != frag_a:
-                frag_b = value
+        for _, _, v in candidates[2:]:
+            if v != frag_a:
+                frag_b = v
                 break
     if frag_a == frag_b:
         return None
 
-    core, sidechain = (frag_a, frag_b) if len(frag_a) >= len(frag_b) else (frag_b, frag_a)
-    return core, sidechain
+    core, side = (frag_a, frag_b) if len(frag_a) >= len(frag_b) else (frag_b, frag_a)
+    return core, side
 
 
 def extract_rules(
