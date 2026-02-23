@@ -35,23 +35,13 @@ def pick_col(df: pd.DataFrame, choices: list[str], required: bool = True) -> str
 
 def _collect_rules_from_fragment_rows(
     fragment_rows: list[tuple[str, str]],
-    *,
-    swap_order: bool,
 ) -> tuple[list[tuple[str, str, str]], dict[str, list[str]]]:
-    """Aggregate fragment rows into directional rules.
-
-    RDKit MMPA tuple ordering can vary across builds. ``swap_order`` allows
-    trying both conventions and selecting the one that yields more usable rules.
-    """
+    """Aggregate fragment rows into directional rules keyed by core fragment."""
     by_core: dict[str, list[str]] = defaultdict(list)
-    for first, second in fragment_rows:
-        core, chains = (second, first) if swap_order else (first, second)
-        if not core or not chains:
+    for core, sidechain in fragment_rows:
+        if not core or not sidechain:
             continue
-        side = chains.split(".")[0]
-        if not side:
-            continue
-        by_core[core].append(side)
+        by_core[core].append(sidechain)
 
     rules: list[tuple[str, str, str]] = []
     for core, sides in by_core.items():
@@ -64,6 +54,64 @@ def _collect_rules_from_fragment_rows(
     return rules, by_core
 
 
+def parse_fragment_tuple(row: tuple[object, ...], chem_module) -> tuple[str, str] | None:
+    """Parse rdMMPA.FragmentMol output row into (core, sidechain).
+
+    The tuple layout can vary by RDKit build, so we search all elements and pick
+    the two best fragment-like candidates. Core is chosen as the longer string.
+    """
+
+    def _is_valid_fragment_smiles(text: str) -> bool:
+        try:
+            return bool(text) and chem_module.MolFromSmiles(text) is not None
+        except Exception:
+            return False
+
+    def _score_candidate(text: str) -> int:
+        score = 0
+        if "*" in text:
+            score += 8
+            if "." in text:
+                score += 2
+        if _is_valid_fragment_smiles(text):
+            score += 4
+        if text and all(ch.isdigit() for ch in text):
+            score -= 6
+        return score
+
+    values = [str(value).strip() for value in row]
+    candidates: list[tuple[int, int, str]] = []
+    for value in values:
+        if not value:
+            continue
+        looks_like_fragment = (
+            "*" in value
+            or ("." in value and "*" in value)
+            or _is_valid_fragment_smiles(value)
+        )
+        if not looks_like_fragment:
+            continue
+        score = _score_candidate(value)
+        candidates.append((score, len(value), value))
+
+    if len(candidates) < 2:
+        return None
+
+    candidates.sort(reverse=True)
+    frag_a = candidates[0][2]
+    frag_b = candidates[1][2]
+    if frag_a == frag_b:
+        for _, _, value in candidates[2:]:
+            if value != frag_a:
+                frag_b = value
+                break
+    if frag_a == frag_b:
+        return None
+
+    core, sidechain = (frag_a, frag_b) if len(frag_a) >= len(frag_b) else (frag_b, frag_a)
+    return core, sidechain
+
+
 def extract_rules(
     smiles: list[str],
     max_cuts: int,
@@ -74,6 +122,7 @@ def extract_rules(
     from rdkit.Chem import rdMMPA
 
     fragment_rows: list[tuple[str, str]] = []
+    debug_rows_printed = 0
     n_valid_molecules = 0
     n_fragmentable_molecules = 0
     for smi in smiles:
@@ -92,31 +141,29 @@ def extract_rules(
         if mol_fragments:
             n_fragmentable_molecules += 1
         for row in mol_fragments:
-            if not isinstance(row, tuple) or len(row) < 2:
+            if not isinstance(row, tuple):
                 continue
-            fragment_rows.append((str(row[0]), str(row[1])))
+            parsed = parse_fragment_tuple(row, Chem)
+            if debug_rows_printed < 5:
+                print(
+                    "Fragment tuple debug: "
+                    f"len={len(row)}, tuple={tuple(str(v) for v in row)}, parsed={parsed}",
+                    file=sys.stderr,
+                )
+                debug_rows_printed += 1
+            if parsed is None:
+                continue
+            core, sidechain = parsed
+            fragment_rows.append((core, sidechain))
 
-    rules_default, by_core_default = _collect_rules_from_fragment_rows(fragment_rows, swap_order=False)
-    rules_swapped, by_core_swapped = _collect_rules_from_fragment_rows(fragment_rows, swap_order=True)
-    if len(rules_swapped) > len(rules_default):
-        n_unique_cores = len(by_core_swapped)
-        n_cores_with_2plus = sum(1 for sides in by_core_swapped.values() if len(set(sides)) >= 2)
-        return (
-            rules_swapped,
-            n_valid_molecules,
-            n_fragmentable_molecules,
-            "swapped",
-            len(fragment_rows),
-            n_unique_cores,
-            n_cores_with_2plus,
-        )
-    n_unique_cores = len(by_core_default)
-    n_cores_with_2plus = sum(1 for sides in by_core_default.values() if len(set(sides)) >= 2)
+    rules_parsed, by_core = _collect_rules_from_fragment_rows(fragment_rows)
+    n_unique_cores = len(by_core)
+    n_cores_with_2plus = sum(1 for sides in by_core.values() if len(set(sides)) >= 2)
     return (
-        rules_default,
+        rules_parsed,
         n_valid_molecules,
         n_fragmentable_molecules,
-        "default",
+        "parsed",
         len(fragment_rows),
         n_unique_cores,
         n_cores_with_2plus,
