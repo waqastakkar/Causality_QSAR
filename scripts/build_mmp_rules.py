@@ -33,22 +33,25 @@ def pick_col(df: pd.DataFrame, choices: list[str], required: bool = True) -> str
     return None
 
 
-def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str, str, str]], int]:
-    from rdkit import Chem
-    from rdkit.Chem import rdMMPA
+def _collect_rules_from_fragment_rows(
+    fragment_rows: list[tuple[str, str]],
+    *,
+    swap_order: bool,
+) -> list[tuple[str, str, str]]:
+    """Aggregate fragment rows into directional rules.
 
+    RDKit MMPA tuple ordering can vary across builds. ``swap_order`` allows
+    trying both conventions and selecting the one that yields more usable rules.
+    """
     by_core: dict[str, list[str]] = defaultdict(list)
-    n_valid_molecules = 0
-    for smi in smiles:
-        mol = Chem.MolFromSmiles(smi) if isinstance(smi, str) else None
-        if mol is None:
+    for first, second in fragment_rows:
+        core, chains = (second, first) if swap_order else (first, second)
+        if not core or not chains:
             continue
-        n_valid_molecules += 1
-        for core, chains in rdMMPA.FragmentMol(mol, maxCuts=max_cut_bonds, maxCutBonds=max_cut_bonds, resultsAsMols=False):
-            if not core or not chains:
-                continue
-            side = chains.split(".")[0]
-            by_core[core].append(side)
+        side = chains.split(".")[0]
+        if not side:
+            continue
+        by_core[core].append(side)
 
     rules: list[tuple[str, str, str]] = []
     for core, sides in by_core.items():
@@ -58,7 +61,30 @@ def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str
                 if i == j:
                     continue
                 rules.append((uniq[i], uniq[j], core))
-    return rules, n_valid_molecules
+    return rules
+
+
+def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str, str, str]], int, str]:
+    from rdkit import Chem
+    from rdkit.Chem import rdMMPA
+
+    fragment_rows: list[tuple[str, str]] = []
+    n_valid_molecules = 0
+    for smi in smiles:
+        mol = Chem.MolFromSmiles(smi) if isinstance(smi, str) else None
+        if mol is None:
+            continue
+        n_valid_molecules += 1
+        for row in rdMMPA.FragmentMol(mol, maxCuts=max_cut_bonds, maxCutBonds=max_cut_bonds, resultsAsMols=False):
+            if not isinstance(row, tuple) or len(row) < 2:
+                continue
+            fragment_rows.append((str(row[0]), str(row[1])))
+
+    rules_default = _collect_rules_from_fragment_rows(fragment_rows, swap_order=False)
+    rules_swapped = _collect_rules_from_fragment_rows(fragment_rows, swap_order=True)
+    if len(rules_swapped) > len(rules_default):
+        return rules_swapped, n_valid_molecules, "swapped"
+    return rules_default, n_valid_molecules, "default"
 
 
 def main() -> None:
@@ -94,12 +120,13 @@ def main() -> None:
     series_col = pick_col(df, ["series_id", "series", "scaffold_id"], required=False)
 
     input_smiles = df[smi_col].dropna().astype(str).tolist()
-    rules_raw, n_valid_molecules = extract_rules(input_smiles, args.max_cut_bonds)
+    rules_raw, n_valid_molecules, tuple_order = extract_rules(input_smiles, args.max_cut_bonds)
     print(
         "Rule extraction diagnostics: "
         f"n_molecules_loaded={len(input_smiles)}, "
         f"n_valid_rdkit_molecules={n_valid_molecules}, "
-        f"n_candidate_pairs_pre_aggregation={len(rules_raw)}",
+        f"n_candidate_pairs_pre_aggregation={len(rules_raw)}, "
+        f"tuple_order_selected={tuple_order}",
         file=sys.stderr,
     )
     counter = Counter((lhs, rhs, ctx) for lhs, rhs, ctx in rules_raw)
