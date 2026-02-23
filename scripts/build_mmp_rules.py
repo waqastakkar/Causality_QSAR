@@ -33,23 +33,17 @@ def pick_col(df: pd.DataFrame, choices: list[str], required: bool = True) -> str
     return None
 
 
-def extract_rules(smiles: list[str], max_cut_bonds: int) -> list[tuple[str, str, str]]:
-    try:
-        from rdkit import Chem
-        from rdkit.Chem import rdMMPA
-    except Exception:
-        # fallback lexical edit rules
-        out: list[tuple[str, str, str]] = []
-        for s in smiles:
-            if isinstance(s, str) and len(s) > 4:
-                out.append((s[:-1], s[-1:], "LEXICAL"))
-        return out
+def extract_rules(smiles: list[str], max_cut_bonds: int) -> tuple[list[tuple[str, str, str]], int]:
+    from rdkit import Chem
+    from rdkit.Chem import rdMMPA
 
     by_core: dict[str, list[str]] = defaultdict(list)
+    n_valid_molecules = 0
     for smi in smiles:
         mol = Chem.MolFromSmiles(smi) if isinstance(smi, str) else None
         if mol is None:
             continue
+        n_valid_molecules += 1
         for core, chains in rdMMPA.FragmentMol(mol, maxCuts=max_cut_bonds, maxCutBonds=max_cut_bonds, resultsAsMols=False):
             if not core or not chains:
                 continue
@@ -64,7 +58,7 @@ def extract_rules(smiles: list[str], max_cut_bonds: int) -> list[tuple[str, str,
                 if i == j:
                     continue
                 rules.append((uniq[i], uniq[j], core))
-    return rules
+    return rules, n_valid_molecules
 
 
 def main() -> None:
@@ -80,6 +74,13 @@ def main() -> None:
         import pandas as pd
     except Exception as exc:
         raise SystemExit("pandas is required to run build_mmp_rules.py") from exc
+    try:
+        from rdkit.Chem import rdMMPA  # noqa: F401
+    except Exception as e:
+        raise SystemExit(
+            "RDKit rdMMPA is not available. MMP rule extraction cannot run. "
+            "Install a full RDKit build that includes rdMMPA, or use a fallback rule generator."
+        ) from e
 
     outdir = Path(args.outdir)
     rules_dir = outdir / "rules"
@@ -92,7 +93,15 @@ def main() -> None:
     p_col = pick_col(df, ["pIC50", "pic50", "y"], required=False)
     series_col = pick_col(df, ["series_id", "series", "scaffold_id"], required=False)
 
-    rules_raw = extract_rules(df[smi_col].dropna().astype(str).tolist(), args.max_cut_bonds)
+    input_smiles = df[smi_col].dropna().astype(str).tolist()
+    rules_raw, n_valid_molecules = extract_rules(input_smiles, args.max_cut_bonds)
+    print(
+        "Rule extraction diagnostics: "
+        f"n_molecules_loaded={len(input_smiles)}, "
+        f"n_valid_rdkit_molecules={n_valid_molecules}, "
+        f"n_candidate_pairs_pre_aggregation={len(rules_raw)}",
+        file=sys.stderr,
+    )
     counter = Counter((lhs, rhs, ctx) for lhs, rhs, ctx in rules_raw)
 
     def build_rows(min_support: int) -> list[dict[str, object]]:
@@ -120,15 +129,11 @@ def main() -> None:
     effective_min_support = args.min_support
     fallback_applied = False
     fallback_message = ""
-    if n_rules_after_min_support == 0 and args.min_support != 3:
-        fallback_applied = True
-        effective_min_support = 3
-        fallback_message = (
-            f"No rules found with min_support={args.min_support}; automatically retrying with min_support=3."
+    if n_rules_raw == 0:
+        warnings.warn(
+            "n_rules_raw=0. No raw MMP pairs were extracted. "
+            "This is not fixed by min_support. Check RDKit MMPA availability and input standardization."
         )
-        warnings.warn(fallback_message)
-        rows = build_rows(effective_min_support)
-        n_rules_after_min_support = len(rows)
 
     print(
         "Rule extraction counts: "
