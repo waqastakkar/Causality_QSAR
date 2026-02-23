@@ -68,7 +68,7 @@ def extract_rules(
     smiles: list[str],
     max_cuts: int,
     max_cut_bonds: int,
-    pattern: str,
+    pattern: str | None,
 ) -> tuple[list[tuple[str, str, str]], int, int, str, int, int, int]:
     from rdkit import Chem
     from rdkit.Chem import rdMMPA
@@ -81,15 +81,14 @@ def extract_rules(
         if mol is None:
             continue
         n_valid_molecules += 1
-        mol_fragments = list(
-            rdMMPA.FragmentMol(
-                mol,
-                maxCuts=max_cuts,
-                maxCutBonds=max_cut_bonds,
-                pattern=pattern,
-                resultsAsMols=False,
-            )
-        )
+        kwargs = {
+            "maxCuts": max_cuts,
+            "maxCutBonds": max_cut_bonds,
+            "resultsAsMols": False,
+        }
+        if pattern:
+            kwargs["pattern"] = pattern
+        mol_fragments = list(rdMMPA.FragmentMol(mol, **kwargs))
         if mol_fragments:
             n_fragmentable_molecules += 1
         for row in mol_fragments:
@@ -139,6 +138,13 @@ def run_selftest_if_requested(args: argparse.Namespace) -> None:
         pattern="[!#1]!@!=!#[!#1]",
     )
     if len(rules_raw) == 0:
+        rules_raw, *_ = extract_rules(
+            sample_smiles,
+            max_cuts=1,
+            max_cut_bonds=20,
+            pattern=None,
+        )
+    if len(rules_raw) == 0:
         raise SystemExit(
             "MMPA self-test failed: 0 rules from first 200 molecules. "
             "Adjust --max_cut_bonds and/or --cut_pattern fragmentation settings."
@@ -182,20 +188,45 @@ def main() -> None:
     series_col = pick_col(df, ["series_id", "series", "scaffold_id"], required=False)
 
     input_smiles = df[smi_col].dropna().astype(str).tolist()
-    (
-        rules_raw,
-        n_valid_molecules,
-        n_fragmentable_molecules,
-        tuple_order,
-        n_fragment_rows,
-        n_unique_cores,
-        n_cores_with_2plus,
-    ) = extract_rules(
-        input_smiles,
-        max_cuts=args.max_cuts,
-        max_cut_bonds=args.max_cut_bonds,
-        pattern=args.cut_pattern,
-    )
+    extraction_attempts = [
+        {
+            "label": "cli_settings",
+            "max_cuts": args.max_cuts,
+            "max_cut_bonds": args.max_cut_bonds,
+            "pattern": args.cut_pattern,
+        },
+        {
+            "label": "rdkit_default_pattern",
+            "max_cuts": args.max_cuts,
+            "max_cut_bonds": args.max_cut_bonds,
+            "pattern": None,
+        },
+        {
+            "label": "single_cut_bond_fallback",
+            "max_cuts": args.max_cuts,
+            "max_cut_bonds": 1,
+            "pattern": None,
+        },
+    ]
+    selected_attempt = extraction_attempts[0]
+    for attempt in extraction_attempts:
+        (
+            rules_raw,
+            n_valid_molecules,
+            n_fragmentable_molecules,
+            tuple_order,
+            n_fragment_rows,
+            n_unique_cores,
+            n_cores_with_2plus,
+        ) = extract_rules(
+            input_smiles,
+            max_cuts=attempt["max_cuts"],
+            max_cut_bonds=attempt["max_cut_bonds"],
+            pattern=attempt["pattern"],
+        )
+        selected_attempt = attempt
+        if rules_raw:
+            break
     print(f"n_input_rows={len(df)}", file=sys.stderr)
     print(f"n_valid_rdkit_mols={n_valid_molecules}", file=sys.stderr)
     print(f"n_fragmentable_mols={n_fragmentable_molecules}", file=sys.stderr)
@@ -209,7 +240,8 @@ def main() -> None:
         f"n_unique_cores={n_unique_cores}, "
         f"n_cores_with_2plus={n_cores_with_2plus}, "
         f"n_candidate_pairs_pre_aggregation={len(rules_raw)}, "
-        f"tuple_order_selected={tuple_order}",
+        f"tuple_order_selected={tuple_order}, "
+        f"fragmentation_settings_used={selected_attempt['label']}",
         file=sys.stderr,
     )
     counter = Counter((lhs, rhs, ctx) for lhs, rhs, ctx in rules_raw)
@@ -237,6 +269,8 @@ def main() -> None:
     n_rules_raw = len(counter)
     n_rules_after_min_support = len(rows)
     min_support_used = args.min_support
+    cut_pattern_used = selected_attempt["pattern"] or "<rdkit_default>"
+    max_cut_bonds_used = selected_attempt["max_cut_bonds"]
     print(f"n_rules_raw={n_rules_raw}", file=sys.stderr)
     if n_rules_raw == 0:
         raise SystemExit(
@@ -247,10 +281,12 @@ def main() -> None:
         )
 
     print(
-        "Rule extraction counts: "
-        f"n_rules_raw={n_rules_raw}, "
-        f"n_rules_after_min_support={n_rules_after_min_support}, "
-        f"min_support_used={min_support_used}",
+            "Rule extraction counts: "
+            f"n_rules_raw={n_rules_raw}, "
+            f"n_rules_after_min_support={n_rules_after_min_support}, "
+            f"min_support_used={min_support_used}, "
+            f"max_cut_bonds_used={max_cut_bonds_used}, "
+            f"cut_pattern_used={cut_pattern_used}",
         file=sys.stderr,
     )
     rules_df = pd.DataFrame(rows).sort_values("support_count", ascending=False) if rows else pd.DataFrame(columns=[
@@ -276,6 +312,8 @@ def main() -> None:
                 "max_cuts",
                 "max_cut_bonds",
                 "cut_pattern",
+                "max_cut_bonds_used",
+                "cut_pattern_used",
             ],
             "value": [
                 len(df),
@@ -289,6 +327,8 @@ def main() -> None:
                 args.max_cuts,
                 args.max_cut_bonds,
                 args.cut_pattern,
+                max_cut_bonds_used,
+                cut_pattern_used,
             ],
         }
     )
@@ -327,6 +367,9 @@ def main() -> None:
         "n_rules": int(len(rules_df)),
         "requested_min_support": int(args.min_support),
         "min_support_used": int(min_support_used),
+        "max_cut_bonds_used": int(max_cut_bonds_used),
+        "cut_pattern_used": cut_pattern_used,
+        "fragmentation_attempt_label": selected_attempt["label"],
     }
     prov_path.write_text(json.dumps(provenance, indent=2), encoding="utf-8")
     print(f"Wrote rules to {rules_path}")
