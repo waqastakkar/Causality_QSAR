@@ -22,3 +22,11 @@
 14. `step13_analyze_screening.sh`
 15. `step14_match_features.sh`
 16. `step15_manuscript.sh`
+
+## Split execution modes
+
+- `training.splits_to_run` unset: run only `training.split_default`.
+- `training.splits_to_run=all`: run every split directory under `outputs/step4/`.
+- `training.splits_to_run=<comma,list>`: run only those split names.
+- Step05/06 publish latest pointers at `outputs/step6/<target>/latest_run.json` and `outputs/step6/<target>/<split>/latest_run.json`.
+- Step09/10 resolve those pointers unless `run_dir` is explicitly provided.
