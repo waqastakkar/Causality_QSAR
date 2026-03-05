@@ -132,6 +132,75 @@ def resolve_join_key(left: pd.DataFrame, right: pd.DataFrame) -> str | None:
             return key
     return None
 
+
+def detect_counterfactual_dir(outputs_root: Path, target: str) -> tuple[Path | None, list[Path]]:
+    checked = [
+        outputs_root / "step7" / "candidates",
+        outputs_root / "step7" / target / "candidates",
+    ]
+    for candidate in checked:
+        if candidate.is_dir():
+            return candidate, checked
+
+    ranked_paths = sorted((outputs_root / "step7").glob("**/ranked_topk.parquet"))
+    if len(ranked_paths) == 1:
+        return ranked_paths[0].parent, checked + ranked_paths
+    if len(ranked_paths) > 1:
+        target_ranked = [p for p in ranked_paths if target in p.as_posix()]
+        if len(target_ranked) == 1:
+            return target_ranked[0].parent, checked + ranked_paths
+        msg = "\n  - ".join(str(p.parent) for p in ranked_paths)
+        raise SystemExit(
+            "Ambiguous counterfactual directory auto-detection under step7. "
+            "Provide --counterfactual_dir explicitly.\n"
+            f"  - {msg}"
+        )
+    return None, checked
+
+
+def resolve_counterfactual_source(cf_dir: Path) -> tuple[Path | None, str | None, list[Path]]:
+    ranked = cf_dir / "ranked_topk.parquet"
+    filtered = cf_dir / "filtered_counterfactuals.parquet"
+    generated = cf_dir / "generated_counterfactuals.parquet"
+    checked = [ranked, filtered, generated]
+    for path, label in [(ranked, "ranked_topk"), (filtered, "filtered_counterfactuals"), (generated, "generated_counterfactuals")]:
+        if path.exists() and path.is_file():
+            return path, label, checked
+    return None, None, checked
+
+
+def build_cf_metrics_from_candidates(cf_path: Path) -> list[dict[str, float | str]]:
+    df = pd.read_parquet(cf_path)
+    if df.empty:
+        return []
+
+    delta_col = next((c for c in ["delta_yhat", "delta_pred", "delta_prediction"] if c in df.columns), None)
+    if delta_col is None:
+        return []
+
+    rows = []
+    if "rule_id" in df.columns:
+        groups = df.groupby("rule_id")
+    else:
+        groups = [("all", df)]
+    for rid, g in groups:
+        vals = pd.to_numeric(g[delta_col], errors="coerce").dropna()
+        if vals.empty:
+            continue
+        frac_pos = float((vals > 0).mean())
+        std = float(vals.std()) if len(vals) > 1 else 0.0
+        rows.append(
+            {
+                "run_id": cf_path.parent.name,
+                "rule_id": rid,
+                "fraction_positive": frac_pos,
+                "delta_std": std,
+                "invariance_score": frac_pos - 0.1 * std,
+                "mean_delta": float(vals.mean()),
+            }
+        )
+    return rows
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Step 8 evaluation suite")
     parser.add_argument("--target", required=True)
@@ -139,6 +208,7 @@ def main() -> None:
     parser.add_argument("--splits_dir", required=True)
     parser.add_argument("--dataset_parquet", required=True)
     parser.add_argument("--bbb_parquet")
+    parser.add_argument("--counterfactual_dir", "--cf_dir", dest="counterfactual_dir", default=None)
     parser.add_argument("--counterfactuals_root")
     parser.add_argument("--outdir", required=True)
     parser.add_argument("--task", choices=["regression", "classification"], default="regression")
@@ -326,22 +396,65 @@ def main() -> None:
     pd.DataFrame(zinv_rows).to_csv(outdir / "reports" / "zinv_stability.csv", index=False)
 
     cf_rows = []
-    if args.compute_cf_consistency and args.counterfactuals_root:
-        for p in sorted(Path(args.counterfactuals_root).glob("*/evaluation/delta_predictions.csv")):
-            df = pd.read_csv(p)
-            if "rule_id" in df.columns and "delta_yhat" in df.columns:
-                for rid, g in df.groupby("rule_id"):
-                    frac_pos = float((g["delta_yhat"] > 0).mean())
-                    std = float(g["delta_yhat"].std()) if len(g) > 1 else 0.0
-                    cf_rows.append({"run_id": p.parent.parent.name, "rule_id": rid, "fraction_positive": frac_pos, "delta_std": std, "invariance_score": frac_pos - 0.1 * std})
-        summary_status["counterfactual_consistency"] = ("RAN", "computed")
+    checked_cf_paths: list[Path] = []
+    if args.compute_cf_consistency:
+        cf_dir: Path | None = Path(args.counterfactual_dir) if args.counterfactual_dir else None
+        if cf_dir is None:
+            outputs_root = Path(args.outdir).resolve().parent
+            cf_dir, checked_cf_paths = detect_counterfactual_dir(outputs_root, args.target)
+            if cf_dir is not None:
+                logging.info("Counterfactual directory auto-detected: %s", cf_dir)
+        else:
+            logging.info("Counterfactual directory provided via CLI: %s", cf_dir)
+
+        if cf_dir is not None:
+            cf_file, cf_source, checked_files = resolve_counterfactual_source(cf_dir)
+            checked_cf_paths.extend(checked_files)
+            if cf_file is None:
+                checked_msg = ", ".join(str(p) for p in checked_files)
+                if args.counterfactual_dir:
+                    raise SystemExit(
+                        "counterfactual_dir was provided but no supported counterfactual files were found. "
+                        f"Checked: {checked_msg}"
+                    )
+                reason = "counterfactual metrics unavailable"
+                print(f"WARNING: Counterfactual consistency skipped ({reason}). Checked paths: {checked_msg}")
+                cf_rows = [{"status": "SKIPPED", "reason": reason, "checked_paths": checked_msg}]
+                summary_status["counterfactual_consistency"] = ("SKIPPED", reason)
+            else:
+                logging.info("Counterfactual consistency source: %s (%s)", cf_file, cf_source)
+                cf_rows = build_cf_metrics_from_candidates(cf_file)
+                if cf_rows:
+                    summary_status["counterfactual_consistency"] = ("RAN", f"computed from {cf_source}")
+                else:
+                    reason = f"{cf_source} available but missing delta prediction columns"
+                    print(f"WARNING: Counterfactual consistency skipped ({reason}). Source file: {cf_file}")
+                    cf_rows = [{"status": "SKIPPED", "reason": reason, "source_file": str(cf_file)}]
+                    summary_status["counterfactual_consistency"] = ("SKIPPED", reason)
+        elif args.counterfactuals_root:
+            for p in sorted(Path(args.counterfactuals_root).glob("*/evaluation/delta_predictions.csv")):
+                df = pd.read_csv(p)
+                if "rule_id" in df.columns and "delta_yhat" in df.columns:
+                    for rid, g in df.groupby("rule_id"):
+                        frac_pos = float((g["delta_yhat"] > 0).mean())
+                        std = float(g["delta_yhat"].std()) if len(g) > 1 else 0.0
+                        cf_rows.append({"run_id": p.parent.parent.name, "rule_id": rid, "fraction_positive": frac_pos, "delta_std": std, "invariance_score": frac_pos - 0.1 * std, "mean_delta": float(g["delta_yhat"].mean())})
+            if cf_rows:
+                summary_status["counterfactual_consistency"] = ("RAN", "computed from counterfactuals_root")
+            else:
+                reason = "counterfactual metrics unavailable"
+                checked_msg = ", ".join(str(p) for p in checked_cf_paths) if checked_cf_paths else "(none)"
+                print(f"WARNING: Counterfactual consistency skipped ({reason}). Checked paths: {checked_msg}")
+                cf_rows = [{"status": "SKIPPED", "reason": reason, "checked_paths": checked_msg}]
+                summary_status["counterfactual_consistency"] = ("SKIPPED", reason)
+        else:
+            reason = "counterfactual metrics unavailable"
+            checked_msg = ", ".join(str(p) for p in checked_cf_paths) if checked_cf_paths else "(none)"
+            print(f"WARNING: Counterfactual consistency skipped ({reason}). Checked paths: {checked_msg}")
+            cf_rows = [{"status": "SKIPPED", "reason": reason, "checked_paths": checked_msg}]
+            summary_status["counterfactual_consistency"] = ("SKIPPED", reason)
     elif not args.compute_cf_consistency:
         summary_status["counterfactual_consistency"] = ("SKIPPED", "flag --compute_cf_consistency not set")
-    else:
-        reason = "counterfactuals_root missing/unreadable"
-        print(f"WARNING: Counterfactual consistency skipped ({reason}).")
-        cf_rows = [{"status": "SKIPPED", "reason": reason}]
-        summary_status["counterfactual_consistency"] = ("SKIPPED", reason)
     pd.DataFrame(cf_rows).to_csv(outdir / "reports" / "counterfactual_consistency.csv", index=False)
 
     pd.DataFrame(columns=["test", "effect_size", "p_value", "p_adjusted"]).to_csv(outdir / "reports" / "statistical_tests.csv", index=False)
@@ -409,7 +522,7 @@ def main() -> None:
     fig, ax = plt.subplots(figsize=(6, 4))
     cf_df = pd.DataFrame(cf_rows)
     pareto_xlabel = "Fraction positive Δŷ"
-    if cf_df is None or cf_df.empty:
+    if cf_df is None or cf_df.empty or "status" in cf_df.columns:
         print("WARNING: fig_pareto_potency_vs_cns skipped (counterfactual metrics unavailable).")
     elif "delta_std" not in cf_df.columns:
         print("WARNING: fig_pareto_potency_vs_cns skipped (missing column: delta_std).")
@@ -424,6 +537,7 @@ def main() -> None:
         else:
             pareto_xlabel = safe_x_col
             ax.scatter(cf_df[safe_x_col], cf_df["delta_std"], alpha=0.7)
+            logging.info("fig_pareto_potency_vs_cns: RAN (source metric column: %s)", safe_x_col)
     else:
         required = ["fraction_positive", "delta_std"]
         missing = [c for c in required if c not in cf_df.columns]
@@ -434,6 +548,7 @@ def main() -> None:
             )
         else:
             ax.scatter(cf_df["fraction_positive"], cf_df["delta_std"], alpha=0.7)
+            logging.info("fig_pareto_potency_vs_cns: RAN (classification metrics)")
     style_axis(ax, style, "Pareto: Potency vs CNS", pareto_xlabel, "Δŷ std")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pareto_potency_vs_cns.svg"); plt.close(fig)
 
