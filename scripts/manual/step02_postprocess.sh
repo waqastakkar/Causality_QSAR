@@ -17,25 +17,43 @@ print(str(post.get('max_value_nM', 1e9)))
 rels = post.get('allowed_relations_primary', ['='])
 for rel in rels:
     print(f"REL::{rel}")
-print(str(out_root))
-print(target)
+print(f"OUT_ROOT::{out_root}")
+print(f"TARGET::{target}")
 PY
 )
 PRIMARY_ENDPOINT="${CFG[0]}"; THRESHOLD="${CFG[1]}"; AGGREGATE="${CFG[2]}"; MAX_VALUE_NM="${CFG[3]}"
-OUTPUTS_ROOT="${CFG[4]}"; TARGET="${CFG[5]}"
+OUTPUTS_ROOT=""
+TARGET=""
+RELATIONS=()
+for line in "${CFG[@]:4}"; do
+  if [[ "$line" == REL::* ]]; then
+    RELATIONS+=("${line#REL::}")
+  elif [[ "$line" == OUT_ROOT::* ]]; then
+    OUTPUTS_ROOT="${line#OUT_ROOT::}"
+  elif [[ "$line" == TARGET::* ]]; then
+    TARGET="${line#TARGET::}"
+  fi
+done
+
+[[ -n "$OUTPUTS_ROOT" ]] || manual_fail_preflight "unable to resolve outputs_root from config"
+[[ -n "$TARGET" ]] || manual_fail_preflight "unable to resolve target from config"
+
 STEP_OUT="$OUTPUTS_ROOT/step2"
-INPUT_CSV="$OUTPUTS_ROOT/step1/${TARGET}_qsar_ready.csv"
+INPUT_CSV_OVERRIDE="$(manual_get_override input "${EXTRA_ARGS[@]}")"
+if [[ -z "$INPUT_CSV_OVERRIDE" ]]; then
+  INPUT_CSV_OVERRIDE="$(manual_get_override postprocess.input "${EXTRA_ARGS[@]}")"
+fi
+if [[ -n "$INPUT_CSV_OVERRIDE" && "$INPUT_CSV_OVERRIDE" = /* ]]; then
+  INPUT_CSV="$INPUT_CSV_OVERRIDE"
+else
+  INPUT_CSV="$OUTPUTS_ROOT/step1/${TARGET}_qsar_ready.csv"
+fi
 LOG_FILE="$STEP_OUT/step02_postprocess.log"
 mkdir -p "$STEP_OUT"
+echo "[$(basename "$0")] Resolved Step1 input: $INPUT_CSV"
 manual_require_file "$INPUT_CSV" "run step01_extract first"
 manual_require_columns "$PYTHON_BIN" "$INPUT_CSV" "canonical_smiles,molecule_chembl_id,standard_type,standard_units,standard_relation,standard_value"
 CMD=("$PYTHON_BIN" "scripts/qsar_postprocess.py" "--config" "$CONFIG" "--input" "$INPUT_CSV" "--outdir" "$STEP_OUT" "--endpoint" "$PRIMARY_ENDPOINT" "--threshold" "$THRESHOLD" "--aggregate" "$AGGREGATE" "--max_value_nM" "$MAX_VALUE_NM")
-RELATIONS=()
-for line in "${CFG[@]:6}"; do
-  if [[ "$line" == REL::* ]]; then
-    RELATIONS+=("${line#REL::}")
-  fi
-done
 if [[ ${#RELATIONS[@]} -gt 0 ]]; then
   CMD+=("--relation_keep" "${RELATIONS[@]}")
 fi
