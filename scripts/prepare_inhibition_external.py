@@ -109,6 +109,15 @@ def save_environment_txt(path: Path) -> None:
     path.write_text("\n".join(text) + "\n", encoding="utf-8")
 
 
+def read_external_csv(path: str) -> tuple[pd.DataFrame, str]:
+    raw = pd.read_csv(path, sep=";", low_memory=False)
+    detected_delimiter = ";"
+    if len(raw.columns) == 1 and "," in str(raw.columns[0]):
+        raw = pd.read_csv(path, sep=",", low_memory=False)
+        detected_delimiter = ","
+    return raw, detected_delimiter
+
+
 def main() -> None:
     args = parse_args()
     outdir = Path(args.outdir)
@@ -130,8 +139,10 @@ def main() -> None:
     )
     configure_matplotlib(style, svg=True)
 
-    raw = pd.read_csv(args.input_csv, sep=";", low_memory=False)
-    smi_col = resolve_col(raw, ["Smiles", "smiles"])
+    raw, detected_delimiter = read_external_csv(args.input_csv)
+    print(f"[prepare_inhibition_external] detected delimiter: '{detected_delimiter}'")
+    smi_col = resolve_col(raw, ["Smiles", "smiles", "canonical_smiles"])
+    print(f"[prepare_inhibition_external] resolved smiles column: {smi_col}")
     type_col = resolve_col(raw, ["Standard Type"])
     unit_col = resolve_col(raw, ["Standard Units"])
     value_col = resolve_col(raw, ["Standard Value"])
