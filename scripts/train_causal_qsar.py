@@ -62,6 +62,7 @@ class TrainConfig:
     epochs: int
     early_stopping_patience: int
     batch_size: int
+    max_rows: int
     lr: float
     seed: int
     bbb_parquet: str | None
@@ -133,7 +134,7 @@ def evaluate(model, loader, device, task, lambda_grl=1.0):
                     }
                 )
             z_all.append(out["z_inv"].cpu().numpy())
-    df = pd.DataFrame(rows)
+    df = pd.DataFrame(rows, columns=["molecule_id", "y_true", "y_pred", "env_id_manual", "env_pred"])
     z = np.concatenate(z_all, axis=0) if z_all else np.empty((0, 1))
     return df, z
 
@@ -170,6 +171,7 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=300)
     p.add_argument("--early_stopping_patience", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--max_rows", type=int, default=0, help="Optional cap on rows loaded from dataset_parquet (0 disables).")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--bbb_parquet", default=None)
@@ -243,6 +245,9 @@ def main():
         yaml.safe_dump(asdict(cfg), f)
 
     df = normalize_training_inputs(pd.read_parquet(cfg.dataset_parquet))
+    if cfg.max_rows and cfg.max_rows > 0 and len(df) > cfg.max_rows:
+        df = df.sample(n=cfg.max_rows, random_state=cfg.seed).reset_index(drop=True)
+        logging.info("Applied max_rows=%s; sampled dataset down to %s rows", cfg.max_rows, len(df))
 
     resolved_env_col = cfg.env_col
     if resolved_env_col not in df.columns:
@@ -381,7 +386,15 @@ def main():
 
         train_pred_df, _ = evaluate(model, train_loader, device, cfg.task)
         val_pred_df, _ = evaluate(model, val_loader, device, cfg.task)
-        if cfg.task == "regression":
+        if val_pred_df.empty:
+            logging.warning("Validation split is empty for split_name=%s; using train metrics as fallback", cfg.split_name)
+            if cfg.task == "regression":
+                vmetric = regression_metrics(train_pred_df["y_true"], train_pred_df["y_pred"])
+                score = vmetric["rmse"]
+            else:
+                vmetric = classification_metrics(train_pred_df["y_true"], train_pred_df["y_pred"])
+                score = -float(vmetric.get("auc", 0.0) if not np.isnan(vmetric.get("auc", np.nan)) else 0.0)
+        elif cfg.task == "regression":
             vmetric = regression_metrics(val_pred_df["y_true"], val_pred_df["y_pred"])
             score = vmetric["rmse"]
         else:
@@ -441,7 +454,13 @@ def main():
         pred_df.to_parquet(run_root / f"predictions/{split}_predictions.parquet", index=False)
 
     test_df = pred_dfs["test"]
-    if cfg.task == "regression":
+    if test_df.empty:
+        logging.warning("Test split is empty for split_name=%s; emitting NaN metrics", cfg.split_name)
+        if cfg.task == "regression":
+            ms = {"rmse": np.nan, "mae": np.nan, "r2": np.nan, "spearman": np.nan, "pearson": np.nan}
+        else:
+            ms = {"auc": np.nan, "pr_auc": np.nan, "f1": np.nan, "balanced_acc": np.nan}
+    elif cfg.task == "regression":
         ms = regression_metrics(test_df["y_true"], test_df["y_pred"])
     else:
         ms = classification_metrics(test_df["y_true"], test_df["y_pred"])
@@ -467,7 +486,9 @@ def main():
     )
     inv.to_csv(run_root / "reports/invariance_checks.csv", index=False)
 
-    if cfg.task == "classification":
+    if test_df.empty:
+        cal_df = pd.DataFrame()
+    elif cfg.task == "classification":
         ece, cal_df = expected_calibration_error(test_df["y_true"], test_df["y_pred"])
         cal_df["ece"] = ece
     else:

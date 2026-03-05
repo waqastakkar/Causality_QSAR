@@ -1,6 +1,6 @@
 paper_id: ptp1b_causal_qsar_v1
 target: CHEMBL335
-smoke: false
+smoke: true
 
 paths:
   chembl_sqlite: data/raw/chembl_36.db

@@ -188,6 +188,31 @@ bash scripts/manual/step06_train_causal.sh configs/ptp1b.yaml training.splits_to
 bash scripts/manual/step07_counterfactuals.sh configs/ptp1b.yaml cns_mpo_threshold=4.5
 ```
 
+### Smoke mode (fast pre-merge checks)
+
+Smoke mode is **opt-in** and should use either:
+
+- `configs/ptp1b_smoke.yaml`, or
+- `configs/ptp1b.yaml` with override `smoke=true`.
+
+Default `configs/ptp1b.yaml` behavior is unchanged (`smoke: false`).
+
+Example smoke run commands:
+
+```bash
+python scripts/smoke/make_tiny_step3_parquet.py
+bash scripts/manual/step04_generate_splits.sh configs/ptp1b_smoke.yaml
+bash scripts/manual/step05_benchmark.sh configs/ptp1b_smoke.yaml training.splits_to_run=scaffold_bm
+bash scripts/manual/step06_train_causal.sh configs/ptp1b_smoke.yaml training.splits_to_run=scaffold_bm
+bash scripts/manual/step08_evaluate_runs.sh configs/ptp1b_smoke.yaml
+```
+
+Equivalent override form:
+
+```bash
+bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml smoke=true training.splits_to_run=scaffold_bm
+```
+
 ### Manual step commands (copy/paste)
 
 ```bash
