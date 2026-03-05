@@ -53,6 +53,13 @@ def _pick_col(df: pd.DataFrame, candidates: list[str], required: bool = True) ->
     return None
 
 
+def _pick_prediction_col(df: pd.DataFrame) -> str:
+    candidates = ["yhat", "prediction", "pred", "y_pred", "pIC50_hat", "prediction_mean"]
+    selected = _pick_col(df, candidates)
+    print(f"[step10] Selected prediction column: {selected}")
+    return selected
+
+
 def _save_env_txt(path: Path) -> None:
     try:
         out = subprocess.check_output([sys.executable, "-m", "pip", "freeze"], text=True)
@@ -209,7 +216,7 @@ def main() -> None:
     preds = _load_predictions(run_dir)
     if not preds.empty:
         pmol = _pick_col(preds, ["molecule_id", "compound_id", "mol_id"])
-        pyhat = _pick_col(preds, ["yhat", "prediction", "pred"])
+        pyhat = _pick_prediction_col(preds)
         preds = preds.rename(columns={pmol: "molecule_id", pyhat: "yhat"})
         cols = [c for c in ["molecule_id", "yhat", "split"] if c in preds.columns]
         if "y" in preds.columns and "pIC50" not in df.columns:
