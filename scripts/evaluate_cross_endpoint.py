@@ -51,7 +51,9 @@ def git_commit() -> str | None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Cross-endpoint external evaluation: IC50 regression -> inhibition classification")
+    p = argparse.ArgumentParser(
+        description="Step 09 external active/inactive inhibition evaluation: pIC50 regression predictions -> binary calls"
+    )
     p.add_argument("--target", default="CHEMBL335")
     p.add_argument("--run_dir", required=True)
     p.add_argument("--checkpoint", default="checkpoints/best.pt")
@@ -141,30 +143,25 @@ def _validate_checkpoint_schema(run_dir: Path, external: pd.DataFrame) -> tuple[
 
 def _ensure_activity_labels(df: pd.DataFrame, inhibition_active_threshold: float) -> pd.DataFrame:
     out = df.copy()
-    if "y_inhib_active" in out.columns:
-        out["y_inhib_active"] = pd.to_numeric(out["y_inhib_active"], errors="coerce").astype("Int64")
-        return out
 
-    required = ["standard_type", "standard_units", "standard_value"]
-    missing = [c for c in required if c not in out.columns]
-    if missing:
+    inhibition_col = None
+    for candidate in ["inhibition_percent", "inhibition", "standard_value"]:
+        if candidate in out.columns:
+            inhibition_col = candidate
+            break
+    if inhibition_col is None:
         raise ValueError(
-            "external_parquet must contain y_inhib_active or the columns needed to derive labels: "
-            f"{required}. Missing: {missing}"
+            "external_parquet must include an inhibition measurement column to define true active/inactive labels. "
+            "Expected one of: inhibition_percent, inhibition, standard_value."
         )
 
-    standard_type = out["standard_type"].astype(str).str.lower().str.strip()
-    standard_units = out["standard_units"].astype(str).str.strip()
-    if not standard_type.eq("inhibition").all() or not standard_units.eq("%").all():
-        raise ValueError(
-            "external_parquet label derivation requires standard_type='Inhibition' and standard_units='%' for all rows"
-        )
-
-    inhibition = pd.to_numeric(out["standard_value"], errors="coerce")
+    inhibition = pd.to_numeric(out[inhibition_col], errors="coerce")
     if inhibition.isna().any():
-        raise ValueError("external_parquet contains non-numeric standard_value rows; cannot derive y_inhib_active")
-
+        raise ValueError(
+            f"external_parquet contains non-numeric values in {inhibition_col}; cannot derive true_active labels"
+        )
     out["inhibition_percent"] = inhibition
+
     out["y_inhib_active"] = (inhibition >= inhibition_active_threshold).astype(int)
     return out
 
@@ -271,7 +268,8 @@ def main() -> None:
         "pr_auc": float(average_precision_score(y_true, y_score)) if len(np.unique(y_true)) > 1 else np.nan,
     }
     ce_metrics.update(_binary_metrics(y_true, y_score, args.primary_threshold))
-    pd.DataFrame([ce_metrics]).to_csv(outdir / "reports" / "cross_endpoint_metrics.csv", index=False)
+    main_cols = ["roc_auc", "pr_auc", "threshold", "accuracy", "balanced_accuracy", "f1", "tn", "fp", "fn", "tp"]
+    pd.DataFrame([ce_metrics])[main_cols].to_csv(outdir / "reports" / "cross_endpoint_metrics.csv", index=False)
 
     sens = pd.DataFrame([_binary_metrics(y_true, y_score, t) for t in args.pic50_thresholds])
     sens.to_csv(outdir / "reports" / "threshold_sensitivity.csv", index=False)
@@ -297,14 +295,26 @@ def main() -> None:
         ax.plot(fpr, tpr, label=f"AUC={ce_metrics['roc_auc']:.3f}")
         ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
         ax.legend()
-        style_axis(ax, style, "Cross-endpoint ROC", "False positive rate", "True positive rate")
+        style_axis(
+            ax,
+            style,
+            "Step 09 external active/inactive inhibition evaluation (ROC)",
+            "False positive rate",
+            "True positive rate",
+        )
         fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_roc_external.svg"); plt.close(fig)
 
         pre, rec, _ = precision_recall_curve(y_true, y_score)
         fig, ax = plt.subplots(figsize=(5, 4))
         ax.plot(rec, pre, label=f"PR-AUC={ce_metrics['pr_auc']:.3f}")
         ax.legend()
-        style_axis(ax, style, "Cross-endpoint PR", "Recall", "Precision")
+        style_axis(
+            ax,
+            style,
+            "Step 09 external active/inactive inhibition evaluation (PR)",
+            "Recall",
+            "Precision",
+        )
         fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pr_external.svg"); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -312,14 +322,14 @@ def main() -> None:
     if "inhibition_percent" in scored.columns:
         ax.hist(scored["inhibition_percent"].to_numpy() / 10.0, bins=30, alpha=0.5, label="Inhibition % / 10")
     ax.legend()
-    style_axis(ax, style, "External score distribution", "Value", "Count")
+    style_axis(ax, style, "External active/inactive inhibition score distribution", "Value", "Count")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_external_score_distribution.svg"); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(sens["threshold"], sens["f1"], marker="o", label="F1")
     ax.plot(sens["threshold"], sens["balanced_accuracy"], marker="o", label="Balanced Acc")
     ax.legend()
-    style_axis(ax, style, "Threshold sensitivity", "pIC50 threshold", "Metric")
+    style_axis(ax, style, "External active/inactive inhibition threshold sensitivity", "pIC50 threshold", "Metric")
     fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_threshold_curve.svg"); plt.close(fig)
 
     if args.enable_calibration:
@@ -355,7 +365,13 @@ def main() -> None:
             frac2, mean_pred2 = calibration_curve(y_true, prob_ext_iso, n_bins=10, strategy="uniform")
             ax.plot(mean_pred2, frac2, marker="s", label="Isotonic")
             ax.legend()
-            style_axis(ax, style, "External calibration", "Predicted probability", "Observed fraction")
+            style_axis(
+                ax,
+                style,
+                "External active/inactive inhibition calibration",
+                "Predicted probability",
+                "Observed fraction",
+            )
             fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_calibration_external.svg"); plt.close(fig)
 
             scored["prob_active_platt"] = prob_ext
@@ -387,7 +403,13 @@ def main() -> None:
                 fig, ax = plt.subplots(figsize=(6, 4))
                 bars = pd.DataFrame(rows)
                 ax.bar(bars["group"].astype(str), bars["balanced_accuracy"])
-                style_axis(ax, style, "CNS stratified balanced accuracy", "Group", "Balanced accuracy")
+                style_axis(
+                    ax,
+                    style,
+                    "External active/inactive inhibition CNS stratified balanced accuracy",
+                    "Group",
+                    "Balanced accuracy",
+                )
                 fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_cns_stratified_external.svg"); plt.close(fig)
 
     pd.DataFrame(columns=["note"]).to_csv(outdir / "reports" / "cf_consistency_external.csv", index=False)

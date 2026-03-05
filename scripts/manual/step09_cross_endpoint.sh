@@ -26,6 +26,7 @@ manual_require_dir "$RUN_DIR" "run_dir missing; rerun step06_train_causal.sh"
 manual_require_file "$RUN_DIR/checkpoints/best.pt" "missing checkpoint; rerun step06_train_causal.sh"
 manual_require_file "$RUN_DIR/artifacts/feature_schema.json" "missing feature schema; rerun step06_train_causal.sh"
 echo "[step09] resolved run_dir=$RUN_DIR" | tee -a "$LOG_FILE"
+echo "[step09] starting external active/inactive inhibition evaluation" | tee -a "$LOG_FILE"
 
 EXTERNAL_PARQUET="data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet"
 manual_require_file "$EXTERNAL_PARQUET" "run step08a_prepare_external_inhibition.sh first"
