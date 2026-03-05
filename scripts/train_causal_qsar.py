@@ -139,7 +139,7 @@ def evaluate(model, loader, device, task, lambda_grl=1.0):
 
 
 def make_dirs(root: Path):
-    for sub in ["checkpoints", "configs", "logs", "predictions", "reports", "figures", "provenance"]:
+    for sub in ["checkpoints", "configs", "logs", "predictions", "reports", "figures", "provenance", "artifacts"]:
         (root / sub).mkdir(parents=True, exist_ok=True)
 
 
@@ -269,6 +269,15 @@ def main():
     train_graphs = dataframe_to_graphs(split_df["train"], gcfg)
     val_graphs = dataframe_to_graphs(split_df["val"], gcfg)
     test_graphs = dataframe_to_graphs(split_df["test"], gcfg)
+
+    if not train_graphs:
+        raise ValueError("No training graphs were generated; cannot continue")
+    feature_schema = {
+        "node_feature_dim": int(train_graphs[0].x.shape[1]),
+        "edge_feature_dim": int(train_graphs[0].edge_attr.shape[1]),
+        "graph_builder": "data_graph.atom_features+bond_features",
+    }
+    (run_root / "artifacts" / "feature_schema.json").write_text(json.dumps(feature_schema, indent=2), encoding="utf-8")
 
     train_loader = DataLoader(train_graphs, batch_size=cfg.batch_size, shuffle=True)
     val_loader = DataLoader(val_graphs, batch_size=cfg.batch_size, shuffle=False)

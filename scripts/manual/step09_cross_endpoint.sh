@@ -14,37 +14,13 @@ PY
 )
 OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"
 STEP_OUT="$OUTPUTS_ROOT/step9"; LOG_FILE="$STEP_OUT/step09_cross_endpoint.log"; mkdir -p "$STEP_OUT"
-RUN_DIR="$($PYTHON_BIN - <<PY
-from pathlib import Path
-for root in [Path('$OUTPUTS_ROOT/step6/$TARGET'), Path('$OUTPUTS_ROOT/step5/$TARGET')]:
-    cands = sorted(root.glob('**/checkpoints/best.pt')) if root.exists() else []
-    if cands:
-        print(cands[0].parent.parent)
-        raise SystemExit(0)
-print('')
-PY
-)"
-EXTERNAL_PARQUET="$($PYTHON_BIN - <<PY
-from pathlib import Path
-target = '$TARGET'.lower()
-cands = [
-    Path('data/external/processed') / f"{target}_inhibition" / 'data' / 'inhibition_external_final.parquet',
-    Path('data/external/processed') / 'ptp1b_inhibition_chembl335' / 'data' / 'inhibition_external_final.parquet',
-]
-for p in cands:
-    if p.exists():
-        print(p)
-        break
-PY
-)"
-if [[ -z "$RUN_DIR" || -z "$EXTERNAL_PARQUET" ]]; then
-  reason=()
-  [[ -z "$RUN_DIR" ]] && reason+=("missing trained run checkpoint under outputs/step5")
-  [[ -z "$EXTERNAL_PARQUET" ]] && reason+=("missing external inhibition parquet")
-  printf 'skipped step 9: %s\n' "$(IFS=', '; echo "${reason[*]}")" > "$STEP_OUT/step9_noop.txt"
-  echo "Step 9 skipped: $(IFS=', '; echo "${reason[*]}")" | tee "$LOG_FILE"
-  exit 0
-fi
+RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step6/run_pointer.json")"
+[[ -n "$RUN_DIR" ]] || RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step5/run_pointer.json")"
+[[ -n "$RUN_DIR" ]] || manual_fail_preflight "missing run pointer for cross-endpoint (run step06 or step05)"
+EXTERNAL_PARQUET="data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet"
+manual_require_file "$EXTERNAL_PARQUET" "run step08a_prepare_external_inhibition.sh first"
+manual_require_columns "$PYTHON_BIN" "$EXTERNAL_PARQUET" "smiles_canonical,y_inhib_active"
+manual_require_file "$RUN_DIR/checkpoints/best.pt"
 CMD=("$PYTHON_BIN" "scripts/evaluate_cross_endpoint.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--external_parquet" "$EXTERNAL_PARQUET" "--outdir" "$STEP_OUT")
 BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
 if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi

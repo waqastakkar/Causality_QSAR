@@ -21,6 +21,10 @@ OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; BBB_RULES="${CFG[2]}"; SERIES_RULE
 STEP_OUT="$OUTPUTS_ROOT/step3"
 LOG_FILE="$STEP_OUT/step03_assemble_environments.log"
 mkdir -p "$STEP_OUT"
+manual_require_file "$OUTPUTS_ROOT/step2/row_level_with_pIC50.csv" "run step02_postprocess first"
+manual_require_file "$OUTPUTS_ROOT/step2/compound_level_with_properties.csv" "run step02_postprocess first"
+manual_require_file "$OUTPUTS_ROOT/step1/${TARGET}_qsar_ready.csv" "run step01_extract first"
+manual_require_file "$BBB_RULES" "bbb rules config"
 CMD=("$PYTHON_BIN" "scripts/assemble_environments.py"
   "--target" "$TARGET"
   "--row_level_csv" "$OUTPUTS_ROOT/step2/row_level_with_pIC50.csv"
@@ -40,3 +44,5 @@ if [[ ${#ENV_KEYS[@]} -gt 0 ]]; then
 fi
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
+manual_require_file "$STEP_OUT/multienv_compound_level.parquet"
+manual_require_columns "$PYTHON_BIN" "$STEP_OUT/multienv_compound_level.parquet" "molecule_id,smiles,pIC50,env_id_manual"
