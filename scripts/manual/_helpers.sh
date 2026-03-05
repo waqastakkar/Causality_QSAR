@@ -178,3 +178,68 @@ data = json.loads(ptr.read_text(encoding='utf-8'))
 print(data.get('run_dir', ''))
 PY
 }
+
+manual_get_override() {
+  local key="$1"
+  shift
+  local -a args=("$@")
+  local value=""
+  local i=0
+  while [[ $i -lt ${#args[@]} ]]; do
+    local token="${args[$i]}"
+    if [[ "$token" == "$key="* ]]; then
+      value="${token#*=}"
+    elif [[ "$token" == "--$key" ]]; then
+      if [[ $((i+1)) -lt ${#args[@]} ]]; then
+        value="${args[$((i+1))]}"
+        i=$((i+1))
+      fi
+    fi
+    i=$((i+1))
+  done
+  echo "$value"
+}
+
+manual_resolve_splits_to_run() {
+  local python_bin="$1"
+  local config_path="$2"
+  local splits_root="$3"
+  shift 3
+  "$python_bin" - "$config_path" "$splits_root" "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+import yaml
+
+config_path = Path(sys.argv[1])
+splits_root = Path(sys.argv[2])
+extra = sys.argv[3:]
+cfg = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}
+training = cfg.get('training', {}) if isinstance(cfg.get('training'), dict) else {}
+default_split = str(training.get('split_default', 'scaffold_bm'))
+
+raw = None
+for token in extra:
+    if token.startswith('training.splits_to_run='):
+        raw = token.split('=', 1)[1]
+
+if raw is None or str(raw).strip() == '' or str(raw).strip().lower() in {'null', 'none', 'unset'}:
+    selected = [default_split]
+else:
+    val = str(raw).strip()
+    if val.lower() == 'all':
+        selected = sorted([p.name for p in splits_root.iterdir() if p.is_dir()]) if splits_root.exists() else []
+    else:
+        if val.startswith('[') and val.endswith(']'):
+            try:
+                parsed = json.loads(val)
+                selected = [str(x).strip() for x in parsed if str(x).strip()]
+            except Exception:
+                selected = [s.strip() for s in val.strip('[]').split(',') if s.strip()]
+        else:
+            selected = [s.strip() for s in val.split(',') if s.strip()]
+
+for name in selected:
+    print(name)
+PY
+}

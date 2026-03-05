@@ -14,9 +14,24 @@ PY
 )
 OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"
 STEP_OUT="$OUTPUTS_ROOT/step9"; LOG_FILE="$STEP_OUT/step09_cross_endpoint.log"; mkdir -p "$STEP_OUT"
-RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step6/run_pointer.json")"
-[[ -n "$RUN_DIR" ]] || RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step5/run_pointer.json")"
-[[ -n "$RUN_DIR" ]] || manual_fail_preflight "missing run pointer for cross-endpoint (run step06 or step05)"
+
+RUN_DIR="$(manual_get_override run_dir "${EXTRA_ARGS[@]}")"
+if [[ -z "$RUN_DIR" ]]; then
+  mapfile -t SPLITS < <(manual_resolve_splits_to_run "$PYTHON_BIN" "$CONFIG" "$OUTPUTS_ROOT/step4" "${EXTRA_ARGS[@]}")
+  FIRST_SPLIT="${SPLITS[0]:-}"
+  if [[ -n "$FIRST_SPLIT" ]]; then
+    PTR="$OUTPUTS_ROOT/step6/$TARGET/$FIRST_SPLIT/latest_run.json"
+    [[ -f "$PTR" ]] || PTR="$OUTPUTS_ROOT/step5/$TARGET/$FIRST_SPLIT/latest_run.json"
+    [[ -f "$PTR" ]] && RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$PTR")"
+  fi
+fi
+if [[ -z "$RUN_DIR" ]]; then
+  PTR="$OUTPUTS_ROOT/step6/$TARGET/latest_run.json"
+  [[ -f "$PTR" ]] || PTR="$OUTPUTS_ROOT/step5/$TARGET/latest_run.json"
+  [[ -f "$PTR" ]] && RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$PTR")"
+fi
+[[ -n "$RUN_DIR" ]] || manual_fail_preflight "missing run pointer for cross-endpoint (step6/step5 latest_run.json)"
+
 EXTERNAL_PARQUET="data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet"
 manual_require_file "$EXTERNAL_PARQUET" "run step08a_prepare_external_inhibition.sh first"
 manual_require_columns "$PYTHON_BIN" "$EXTERNAL_PARQUET" "smiles_canonical,y_inhib_active"

@@ -113,6 +113,8 @@ training:
   label_col: pIC50
   seeds: [1, 2, 3, 4, 5]
   split_default: scaffold_bm
+  # unset => only split_default; "all" => every outputs/step4/<split>; or comma-list
+  splits_to_run: all
 
 robustness:
   ensemble_size: 5
@@ -137,7 +139,7 @@ screening:
 | `target` | Target entity (e.g., CHEMBL335 for PTP1B) |
 | `paths.*` | Input/output root paths, including ChEMBL SQLite location |
 | `style.*` | Consistent figure typography and palette parameters |
-| `training.*` | Task type, labels, seeds, and default split strategy |
+| `training.*` | Task type, labels, seeds, default split strategy, and optional `splits_to_run` selector (`all`/list/unset) |
 | `robustness.*` | Ensemble/conformal/applicability domain controls |
 | `screening.*` | Input schema and prioritization settings for virtual screening |
 
@@ -181,7 +183,8 @@ bash scripts/manual/run_all.sh configs/ptp1b.yaml 5-8
 6. Pass extra per-step overrides (converted from `KEY=VALUE` to `--KEY VALUE`):
 
 ```bash
-bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml training.epochs=50
+bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml training.splits_to_run=all
+bash scripts/manual/step06_train_causal.sh configs/ptp1b.yaml training.splits_to_run=random,scaffold_bm training.epochs=1
 bash scripts/manual/step07_counterfactuals.sh configs/ptp1b.yaml cns_mpo_threshold=4.5
 ```
 
@@ -213,15 +216,15 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 | 1 | `step01_extract.sh` | `paths.chembl_sqlite` | `outputs/step1/<target>_qsar_ready.csv` |
 | 2 | `step02_postprocess.sh` | `outputs/step1/<target>_qsar_ready.csv` | `outputs/step2/*` |
 | 3 | `step03_assemble_environments.sh` | step1/step2 CSVs + env rules | `outputs/step3/multienv_compound_level.parquet` |
-| 4 | `step04_generate_splits.sh` | config + step3 dataset | `outputs/step4/*` |
-| 5 | `step05_benchmark.sh` | step3 dataset + step4 splits | `outputs/step5/<target>/*` |
-| 6 | `step06_train_causal.sh` | step3 dataset + step4 splits | `outputs/step6/<target>/*` |
+| 4 | `step04_generate_splits.sh` | config + step3 dataset | `outputs/step4/<split>/*` + `outputs/step4/splits_manifest.json` |
+| 5 | `step05_benchmark.sh` | step3 dataset + selected step4 splits (`training.splits_to_run`) | `outputs/step5/<target>/<split>/<run_id>/*` + latest-run pointers |
+| 6 | `step06_train_causal.sh` | step3 dataset + selected step4 splits (`training.splits_to_run`) | `outputs/step6/<target>/<split>/<run_id>/*` + `latest_run.json` pointers |
 | 7 | `step07_counterfactuals.sh` | run dir + step3 parquet + MMP rules | `outputs/step7/candidates/*.parquet` |
-| 8 | `step08_evaluate_runs.sh` | runs root + step3/step4 | `outputs/step8/*` |
+| 8 | `step08_evaluate_runs.sh` | `run_dir` or `runs_root` + step3/step4 | `outputs/step8/*` |
 | 8a | `step08a_prepare_external_inhibition.sh` | external inhibition CSV + step3 parquet + splits | `data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet` |
-| 9 | `step09_cross_endpoint.sh` | run pointer + canonical external parquet | `outputs/step9/*` |
-| 10 | `step10_interpret.sh` | run checkpoint + step3 parquet | `outputs/step10/*` or `step10_noop.txt` |
-| 11 | `step11_robustness.sh` | config | `outputs/step11/*` |
+| 9 | `step09_cross_endpoint.sh` | explicit `run_dir` or split-aware latest pointer + canonical external parquet | `outputs/step9/*` |
+| 10 | `step10_interpret.sh` | `run_dir` or `runs_root` (multi-run supported) + step3 parquet | `outputs/step10/<split>/<run_id>/*` |
+| 11 | `step11_robustness.sh` | `run_dir` or `runs_root` + step3 parquet | `outputs/step11/*` |
 | 12 | `step12_screen_library.sh` | config + screening inputs | `outputs/step12/*` |
 | 13 | `step13_analyze_screening.sh` | config + step12 outputs | `outputs/step13/*` |
 | 14 | `step14_match_features.sh` | config + step13 outputs | `outputs/step14/*` |

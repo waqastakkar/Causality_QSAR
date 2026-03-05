@@ -11,32 +11,47 @@ cfg = yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8')) or {}
 out_root = Path(cfg.get('paths', {}).get('outputs_root', 'outputs')).resolve()
 training = cfg.get('training', {}) if isinstance(cfg.get('training'), dict) else {}
 seeds = training.get('seeds') or []
-print(str(out_root)); print(str(cfg['target'])); print(str(training.get('split_default', 'scaffold_bm')))
+print(str(out_root)); print(str(cfg['target']))
 print(str(training.get('task', 'regression'))); print(str(training.get('label_col', 'pIC50'))); print(str(training.get('env_col', 'env_id_manual')))
 print(str(training.get('epochs', 300))); print(str(training.get('early_stopping_patience', 30))); print(str(seeds[0]) if seeds else '')
 PY
 )
-OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; SPLIT_NAME="${CFG[2]}"; TASK="${CFG[3]}"; LABEL_COL="${CFG[4]}"; ENV_COL="${CFG[5]}"; EPOCHS="${CFG[6]}"; PATIENCE="${CFG[7]}"; SEED1="${CFG[8]}"
+OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; TASK="${CFG[2]}"; LABEL_COL="${CFG[3]}"; ENV_COL="${CFG[4]}"; EPOCHS="${CFG[5]}"; PATIENCE="${CFG[6]}"; SEED1="${CFG[7]}"
 STEP_OUT="$OUTPUTS_ROOT/step6"
 LOG_FILE="$STEP_OUT/step06_train_causal.log"
 mkdir -p "$STEP_OUT"
 manual_require_file "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "run step03 first"
-manual_require_dir "$OUTPUTS_ROOT/step4/$SPLIT_NAME" "run step04 first"
-CMD=("$PYTHON_BIN" "scripts/train_causal_qsar.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL" "--epochs" "$EPOCHS" "--early_stopping_patience" "$PATIENCE")
-if [[ -n "$SEED1" ]]; then CMD+=("--seed" "$SEED1"); fi
+manual_require_dir "$OUTPUTS_ROOT/step4" "run step04 first"
+mapfile -t SPLITS < <(manual_resolve_splits_to_run "$PYTHON_BIN" "$CONFIG" "$OUTPUTS_ROOT/step4" "${EXTRA_ARGS[@]}")
+[[ ${#SPLITS[@]} -gt 0 ]] || manual_fail_preflight "no splits resolved from training.splits_to_run"
 BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
-if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
-CMD+=("${STYLE_FLAGS[@]}")
-manual_append_overrides EXTRA_ARGS CMD
-manual_run_with_log "$LOG_FILE" "${CMD[@]}"
-BEST_RUN="$("$PYTHON_BIN" - "$OUTPUTS_ROOT" "$TARGET" <<'PY'
+
+LAST_RUN=""
+for SPLIT_NAME in "${SPLITS[@]}"; do
+  manual_require_dir "$OUTPUTS_ROOT/step4/$SPLIT_NAME" "split '$SPLIT_NAME' missing; run step04"
+  CMD=("$PYTHON_BIN" "scripts/train_causal_qsar.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL" "--epochs" "$EPOCHS" "--early_stopping_patience" "$PATIENCE")
+  if [[ -n "$SEED1" ]]; then CMD+=("--seed" "$SEED1"); fi
+  if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
+  CMD+=("${STYLE_FLAGS[@]}")
+  manual_append_overrides EXTRA_ARGS CMD
+  manual_run_with_log "$LOG_FILE" "${CMD[@]}"
+
+  BEST_RUN="$("$PYTHON_BIN" - "$OUTPUTS_ROOT" "$TARGET" "$SPLIT_NAME" <<'PY'
 from pathlib import Path
 import sys
-root = Path(sys.argv[1]) / 'step6' / sys.argv[2]
-cands = sorted(root.glob('**/checkpoints/best.pt'), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
+root = Path(sys.argv[1]) / 'step6' / sys.argv[2] / sys.argv[3]
+cands = sorted(root.glob('*/checkpoints/best.pt'), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
 print(str(cands[0].parent.parent.resolve()) if cands else '')
 PY
 )"
-[[ -n "$BEST_RUN" ]] || manual_fail_preflight "no trained run with checkpoints/best.pt found in $OUTPUTS_ROOT/step6/$TARGET"
-manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/run_pointer.json" "$BEST_RUN" "step06_train_causal"
-manual_require_file "$BEST_RUN/artifacts/feature_schema.json" "training must write feature schema for screening"
+  [[ -n "$BEST_RUN" ]] || manual_fail_preflight "no trained run with checkpoints/best.pt found for split $SPLIT_NAME"
+  manual_require_file "$BEST_RUN/artifacts/feature_schema.json" "training must write feature schema for screening"
+  manual_require_file "$BEST_RUN/predictions/test_predictions.parquet" "training must write test predictions for evaluation"
+
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/run_pointer.json" "$BEST_RUN" "step06_train_causal"
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$TARGET/latest_run.json" "$BEST_RUN" "step06_train_causal"
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$TARGET/$SPLIT_NAME/latest_run.json" "$BEST_RUN" "step06_train_causal"
+  LAST_RUN="$BEST_RUN"
+done
+
+[[ -n "$LAST_RUN" ]] || manual_fail_preflight "step06 completed without producing runs"

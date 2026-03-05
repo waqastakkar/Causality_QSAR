@@ -20,44 +20,70 @@ def cols_ok(path: Path, required: list[str]) -> tuple[bool, str]:
     return (not missing, "ok" if not missing else f"missing columns: {missing}")
 
 
+def pointer_ok(path: Path) -> tuple[bool, str, str | None]:
+    if not path.exists():
+        return False, f"missing file: {path}", None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    run_dir = data.get("run_dir")
+    if not run_dir:
+        return False, f"pointer missing run_dir: {path}", None
+    return True, "ok", str(run_dir)
+
+
+def print_check(name: str, ok: bool, detail: str) -> int:
+    print(f"{name}\t{'PASS' if ok else 'FAIL'}\t{detail}")
+    return 0 if ok else 1
+
+
 def main() -> int:
     if pd is None:
         print("pipeline_doctor requires pandas in the selected runtime")
         return 2
+
     if len(sys.argv) != 2:
         print("Usage: python scripts/pipeline_doctor.py <config.yaml>")
         return 2
+
     cfg = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}
     out = Path(cfg.get("paths", {}).get("outputs_root", "outputs")).resolve()
-    split = cfg.get("training", {}).get("split_default", "scaffold_bm")
-    checks = [
-        ("step01_output", out / "step1" / f"{cfg['target']}_qsar_ready.csv", ["canonical_smiles", "pIC50"]),
-        ("step02_compound", out / "step2" / "compound_level_with_properties.csv", ["canonical_smiles"]),
-        ("step03_multienv", out / "step3" / "multienv_compound_level.parquet", ["molecule_id", "smiles", "pIC50", "env_id_manual"]),
-        ("step04_train_ids", out / "step4" / split / "train_ids.csv", ["molecule_id"]),
-        ("step06_pointer", out / "step6" / "run_pointer.json", []),
-        ("step08a_external", Path("data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet"), ["smiles_canonical", "y_inhib_active"]),
-    ]
-    print("check\tstatus\tdetail")
-    failed = 0
-    for name, path, req in checks:
-        if path.suffix == ".json":
-            ok = path.exists()
-            detail = "ok" if ok else f"missing file: {path}"
-        else:
-            ok, detail = cols_ok(path, req)
-        status = "PASS" if ok else "FAIL"
-        failed += 0 if ok else 1
-        print(f"{name}\t{status}\t{detail}")
+    target = cfg["target"]
+    split_default = cfg.get("training", {}).get("split_default", "scaffold_bm")
+    split_manifest = out / "step4" / "splits_manifest.json"
+    external_parquet = Path("data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet")
 
-    ptr = out / "step6" / "run_pointer.json"
-    if ptr.exists():
-        data = json.loads(ptr.read_text(encoding="utf-8"))
-        run_dir = Path(data.get("run_dir", ""))
-        feature_schema = run_dir / "artifacts" / "feature_schema.json"
-        ok = feature_schema.exists()
-        print(f"step12_schema\t{'PASS' if ok else 'FAIL'}\t{'ok' if ok else f'missing file: {feature_schema}'}")
-        failed += 0 if ok else 1
+    failed = 0
+    print("check\tstatus\tdetail")
+    failed += print_check("step01_output", *cols_ok(out / "step1" / f"{target}_qsar_ready.csv", ["canonical_smiles", "pIC50"]))
+    failed += print_check("step02_output", *cols_ok(out / "step2" / "compound_level_with_properties.csv", ["canonical_smiles"]))
+    failed += print_check("step03_output", *cols_ok(out / "step3" / "multienv_compound_level.parquet", ["molecule_id", "smiles", "pIC50"]))
+
+    if split_manifest.exists():
+        sm = json.loads(split_manifest.read_text(encoding="utf-8"))
+        splits = sm.get("split_names", [])
+        failed += print_check("step04_manifest", bool(splits), f"splits={splits}")
+    else:
+        splits = [split_default] if (out / "step4" / split_default).exists() else []
+        failed += print_check("step04_manifest", False, f"missing file: {split_manifest}")
+
+    for split in (splits[:3] if splits else [split_default]):
+        failed += print_check(f"step04_{split}_train_ids", *cols_ok(out / "step4" / split / "train_ids.csv", ["molecule_id"]))
+
+    target_latest = out / "step6" / target / "latest_run.json"
+    ok, detail, run_dir = pointer_ok(target_latest)
+    failed += print_check("step06_target_pointer", ok, detail)
+    if run_dir:
+        run_path = Path(run_dir)
+        failed += print_check("run_checkpoint", (run_path / "checkpoints" / "best.pt").exists(), str(run_path / "checkpoints" / "best.pt"))
+        failed += print_check("run_feature_schema", (run_path / "artifacts" / "feature_schema.json").exists(), str(run_path / "artifacts" / "feature_schema.json"))
+        failed += print_check("run_test_predictions", (run_path / "predictions" / "test_predictions.parquet").exists(), str(run_path / "predictions" / "test_predictions.parquet"))
+
+    failed += print_check("step08a_external", *cols_ok(external_parquet, ["smiles_canonical", "y_inhib_active"]))
+
+    if splits:
+        sample_split = splits[0]
+        split_ptr = out / "step6" / target / sample_split / "latest_run.json"
+        ok2, detail2, _ = pointer_ok(split_ptr)
+        failed += print_check(f"step06_split_pointer_{sample_split}", ok2, detail2)
 
     return 1 if failed else 0
 
