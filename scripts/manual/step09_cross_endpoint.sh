@@ -17,15 +17,6 @@ STEP_OUT="$OUTPUTS_ROOT/step9"; LOG_FILE="$STEP_OUT/step09_cross_endpoint.log"; 
 
 RUN_DIR="$(manual_get_override run_dir "${EXTRA_ARGS[@]}")"
 if [[ -z "$RUN_DIR" ]]; then
-  mapfile -t SPLITS < <(manual_resolve_splits_to_run "$PYTHON_BIN" "$CONFIG" "$OUTPUTS_ROOT/step4" "${EXTRA_ARGS[@]}")
-  FIRST_SPLIT="${SPLITS[0]:-}"
-  if [[ -n "$FIRST_SPLIT" ]]; then
-    PTR="$OUTPUTS_ROOT/step6/$TARGET/$FIRST_SPLIT/latest_run.json"
-    [[ -f "$PTR" ]] || PTR="$OUTPUTS_ROOT/step5/$TARGET/$FIRST_SPLIT/latest_run.json"
-    [[ -f "$PTR" ]] && RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$PTR")"
-  fi
-fi
-if [[ -z "$RUN_DIR" ]]; then
   PTR="$OUTPUTS_ROOT/step6/$TARGET/latest_run.json"
   [[ -f "$PTR" ]] || PTR="$OUTPUTS_ROOT/step5/$TARGET/latest_run.json"
   [[ -f "$PTR" ]] && RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$PTR")"

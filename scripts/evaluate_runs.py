@@ -225,6 +225,27 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     outdir = Path(args.outdir)
+    outputs_root = outdir.resolve().parent
+
+    auto_bbb_candidates = [
+        outputs_root / "step3" / "data" / "bbb_annotations.parquet",
+        outputs_root / "step3" / "bbb_annotations.parquet",
+    ]
+    if not args.bbb_parquet:
+        for candidate in auto_bbb_candidates:
+            if candidate.exists():
+                args.bbb_parquet = str(candidate)
+                logging.info("Auto-enabled CNS subset metrics with bbb_parquet=%s", candidate)
+                break
+
+    auto_cf_candidates = [
+        outputs_root / "step7" / "candidates" / "ranked_topk.parquet",
+        outputs_root / "step7" / args.target / "candidates" / "ranked_topk.parquet",
+    ]
+    if not args.compute_cf_consistency:
+        if any(p.exists() for p in auto_cf_candidates):
+            args.compute_cf_consistency = True
+            logging.info("Auto-enabled counterfactual consistency from step7 ranked_topk.parquet")
     for sub in ["inputs_snapshot", "predictions/per_split_predictions", "reports", "figures", "provenance"]:
         (outdir / sub).mkdir(parents=True, exist_ok=True)
 

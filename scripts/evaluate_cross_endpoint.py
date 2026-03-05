@@ -57,8 +57,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--checkpoint", default="checkpoints/best.pt")
     p.add_argument("--external_parquet", required=True)
     p.add_argument("--outdir", required=True)
-    p.add_argument("--pIC50_threshold", type=float, default=6.0)
-    p.add_argument("--threshold_grid", type=float, nargs="+", default=[5.0, 5.5, 6.0, 6.5, 7.0])
+    p.add_argument("--primary_threshold", type=float, default=5.0)
+    p.add_argument("--pic50_thresholds", type=float, nargs="+", default=[5.0, 5.5, 6.0])
+    p.add_argument("--inhibition_active_threshold", type=float, default=50.0)
     p.add_argument("--enable_calibration", type=lambda x: str(x).lower() == "true", default=False)
     p.add_argument("--bbb_parquet", default=None)
     p.add_argument("--svg", action="store_true", default=True)
@@ -128,12 +129,44 @@ def _validate_checkpoint_schema(run_dir: Path, external: pd.DataFrame) -> tuple[
     current_node, current_edge = _current_feature_dims(external)
     if saved_node != current_node or saved_edge != current_edge:
         raise ValueError(
-            "Checkpoint feature schema mismatch: "
-            f"run was trained with node_dim={saved_node}, edge_dim={saved_edge}, "
-            f"but current code produces node_dim={current_node}, edge_dim={current_edge}. "
-            "Re-run Step 06 with the current code."
+            "Model schema mismatch.\n"
+            f"Expected node_dim: {saved_node}\n"
+            f"Current node_dim: {current_node}\n"
+            f"Expected edge_dim: {saved_edge}\n"
+            f"Current edge_dim: {current_edge}\n\n"
+            "You must rerun Step 06 after featurization change."
         )
     return current_node, current_edge
+
+
+def _ensure_activity_labels(df: pd.DataFrame, inhibition_active_threshold: float) -> pd.DataFrame:
+    out = df.copy()
+    if "y_inhib_active" in out.columns:
+        out["y_inhib_active"] = pd.to_numeric(out["y_inhib_active"], errors="coerce").astype("Int64")
+        return out
+
+    required = ["standard_type", "standard_units", "standard_value"]
+    missing = [c for c in required if c not in out.columns]
+    if missing:
+        raise ValueError(
+            "external_parquet must contain y_inhib_active or the columns needed to derive labels: "
+            f"{required}. Missing: {missing}"
+        )
+
+    standard_type = out["standard_type"].astype(str).str.lower().str.strip()
+    standard_units = out["standard_units"].astype(str).str.strip()
+    if not standard_type.eq("inhibition").all() or not standard_units.eq("%").all():
+        raise ValueError(
+            "external_parquet label derivation requires standard_type='Inhibition' and standard_units='%' for all rows"
+        )
+
+    inhibition = pd.to_numeric(out["standard_value"], errors="coerce")
+    if inhibition.isna().any():
+        raise ValueError("external_parquet contains non-numeric standard_value rows; cannot derive y_inhib_active")
+
+    out["inhibition_percent"] = inhibition
+    out["y_inhib_active"] = (inhibition >= inhibition_active_threshold).astype(int)
+    return out
 
 
 def _predict_pic50(model, df: pd.DataFrame, batch_size: int = 128) -> pd.DataFrame:
@@ -200,8 +233,7 @@ def main() -> None:
     configure_matplotlib(style, svg=True)
 
     external = pd.read_parquet(args.external_parquet)
-    if "y_inhib_active" not in external.columns:
-        raise ValueError("external_parquet must contain y_inhib_active")
+    external = _ensure_activity_labels(external, args.inhibition_active_threshold)
 
     node_dim, edge_dim = _validate_checkpoint_schema(run_dir, external)
 
@@ -238,11 +270,26 @@ def main() -> None:
         "roc_auc": float(roc_auc_score(y_true, y_score)) if len(np.unique(y_true)) > 1 else np.nan,
         "pr_auc": float(average_precision_score(y_true, y_score)) if len(np.unique(y_true)) > 1 else np.nan,
     }
-    ce_metrics.update(_binary_metrics(y_true, y_score, args.pIC50_threshold))
+    ce_metrics.update(_binary_metrics(y_true, y_score, args.primary_threshold))
     pd.DataFrame([ce_metrics]).to_csv(outdir / "reports" / "cross_endpoint_metrics.csv", index=False)
 
-    sens = pd.DataFrame([_binary_metrics(y_true, y_score, t) for t in args.threshold_grid])
+    sens = pd.DataFrame([_binary_metrics(y_true, y_score, t) for t in args.pic50_thresholds])
     sens.to_csv(outdir / "reports" / "threshold_sensitivity.csv", index=False)
+
+    dist_df = pd.DataFrame(
+        {
+            "metric": ["pIC50_hat_min", "pIC50_hat_median", "pIC50_hat_max", "inhibition_min", "inhibition_median", "inhibition_max"],
+            "value": [
+                float(np.nanmin(y_score)),
+                float(np.nanmedian(y_score)),
+                float(np.nanmax(y_score)),
+                float(np.nanmin(scored.get("inhibition_percent", pd.Series(np.nan, index=scored.index)))),
+                float(np.nanmedian(scored.get("inhibition_percent", pd.Series(np.nan, index=scored.index)))),
+                float(np.nanmax(scored.get("inhibition_percent", pd.Series(np.nan, index=scored.index)))),
+            ],
+        }
+    )
+    dist_df.to_csv(outdir / "reports" / "external_distribution.csv", index=False)
 
     if len(np.unique(y_true)) > 1:
         fpr, tpr, _ = roc_curve(y_true, y_score)
@@ -251,21 +298,29 @@ def main() -> None:
         ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
         ax.legend()
         style_axis(ax, style, "Cross-endpoint ROC", "False positive rate", "True positive rate")
-        fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_cross_endpoint_roc.svg"); plt.close(fig)
+        fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_roc_external.svg"); plt.close(fig)
 
         pre, rec, _ = precision_recall_curve(y_true, y_score)
         fig, ax = plt.subplots(figsize=(5, 4))
         ax.plot(rec, pre, label=f"PR-AUC={ce_metrics['pr_auc']:.3f}")
         ax.legend()
         style_axis(ax, style, "Cross-endpoint PR", "Recall", "Precision")
-        fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_cross_endpoint_pr.svg"); plt.close(fig)
+        fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_pr_external.svg"); plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(y_score, bins=30, alpha=0.65, label="Predicted pIC50")
+    if "inhibition_percent" in scored.columns:
+        ax.hist(scored["inhibition_percent"].to_numpy() / 10.0, bins=30, alpha=0.5, label="Inhibition % / 10")
+    ax.legend()
+    style_axis(ax, style, "External score distribution", "Value", "Count")
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_external_score_distribution.svg"); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(sens["threshold"], sens["f1"], marker="o", label="F1")
     ax.plot(sens["threshold"], sens["balanced_accuracy"], marker="o", label="Balanced Acc")
     ax.legend()
     style_axis(ax, style, "Threshold sensitivity", "pIC50 threshold", "Metric")
-    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_threshold_sensitivity.svg"); plt.close(fig)
+    fig.tight_layout(); fig.savefig(outdir / "figures" / "fig_threshold_curve.svg"); plt.close(fig)
 
     if args.enable_calibration:
         val_path = run_dir / "predictions" / "val_predictions.parquet"
@@ -273,7 +328,7 @@ def main() -> None:
             val = pd.read_parquet(val_path)
             yv = val["y_true"].to_numpy()
             sv = val["y_pred"].to_numpy()
-            yv_bin = (yv >= args.pIC50_threshold).astype(int)
+            yv_bin = (yv >= args.primary_threshold).astype(int)
 
             platt = LogisticRegression(max_iter=1000)
             platt.fit(sv.reshape(-1, 1), yv_bin)
@@ -322,7 +377,7 @@ def main() -> None:
                 for grp, g in merged.groupby(merged[col].fillna("unknown")):
                     yt = g["y_true"].to_numpy()
                     ys = g["pIC50_hat"].to_numpy()
-                    r = _binary_metrics(yt, ys, args.pIC50_threshold)
+                    r = _binary_metrics(yt, ys, args.primary_threshold)
                     r["group"] = grp
                     r["roc_auc"] = float(roc_auc_score(yt, ys)) if len(np.unique(yt)) > 1 else np.nan
                     r["pr_auc"] = float(average_precision_score(yt, ys)) if len(np.unique(yt)) > 1 else np.nan

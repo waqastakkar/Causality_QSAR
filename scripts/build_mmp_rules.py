@@ -337,6 +337,11 @@ def main() -> None:
     n_rules_raw = len(counter)
     n_rules_after_min_support = len(rows)
     min_support_used = args.min_support
+    if n_rules_after_min_support == 0 and args.min_support > 2:
+        rows = build_rows(2)
+        n_rules_after_min_support = len(rows)
+        min_support_used = 2
+        print("Rule extraction fallback triggered (min_support=2)", file=sys.stderr)
     cut_pattern_used = selected_attempt["pattern"] or "<rdkit_default>"
     max_cut_bonds_used = selected_attempt["max_cut_bonds"]
     print(f"n_rules_raw={n_rules_raw}", file=sys.stderr)

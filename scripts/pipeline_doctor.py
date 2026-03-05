@@ -69,6 +69,25 @@ def step06_09_compatibility(out: Path, target: str) -> tuple[bool, str]:
     return True, f"run_dir={run_path}; node_dim={saved_node}; edge_dim={saved_edge}"
 
 
+
+
+def step09_ready_checks(out: Path) -> tuple[bool, str]:
+    ckpts = sorted(out.glob("step6/*/*/checkpoints/best.pt"))
+    schemas = sorted(out.glob("step6/*/*/artifacts/feature_schema.json"))
+    step3 = out / "step3" / "multienv_compound_level.parquet"
+    external = Path("data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet")
+    missing = []
+    if not ckpts:
+        missing.append("outputs/step6/*/checkpoints/best.pt")
+    if not schemas:
+        missing.append("outputs/step6/*/artifacts/feature_schema.json")
+    if not step3.exists():
+        missing.append(str(step3))
+    if not external.exists():
+        missing.append(str(external))
+    if missing:
+        return False, "missing prerequisites: " + "; ".join(missing)
+    return True, f"ckpts={len(ckpts)}, schemas={len(schemas)}, step3={step3}, external={external}"
 def step2_contract_ok(row_path: Path, max_value_nm: float) -> tuple[bool, str]:
     if not row_path.exists():
         return False, f"missing file: {row_path}"
@@ -135,6 +154,13 @@ def main() -> int:
     failed += print_check("step06_09_compatibility", compat_ok, compat_detail)
 
     failed += print_check("step08a_external", *cols_ok(external_parquet, ["smiles_canonical", "y_inhib_active"]))
+
+    step09_ok, step09_detail = step09_ready_checks(out)
+    if step09_ok:
+        print("STEP09_READY: PASS")
+    else:
+        print(f"STEP09_READY: FAIL ({step09_detail})")
+        failed += 1
     return 1 if failed else 0
 
 
