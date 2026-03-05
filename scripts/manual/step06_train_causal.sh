@@ -38,29 +38,23 @@ BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQ
 LAST_RUN=""
 for SPLIT_NAME in "${SPLITS[@]}"; do
   manual_require_dir "$OUTPUTS_ROOT/step4/$SPLIT_NAME" "split '$SPLIT_NAME' missing; run step04"
-  CMD=("$PYTHON_BIN" "scripts/train_causal_qsar.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL" "--epochs" "$EPOCHS" "--early_stopping_patience" "$PATIENCE")
+  RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)_${SPLIT_NAME}"
+  RUN_DIR="$STEP_OUT/$TARGET/$SPLIT_NAME/$RUN_ID"
+  CMD=("$PYTHON_BIN" "scripts/train_causal_qsar.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL" "--epochs" "$EPOCHS" "--early_stopping_patience" "$PATIENCE" "--run_id" "$RUN_ID")
   if [[ -n "$SEED1" ]]; then CMD+=("--seed" "$SEED1"); fi
   if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
   CMD+=("${STYLE_FLAGS[@]}")
   manual_append_overrides EXTRA_ARGS CMD
   manual_run_with_log "$LOG_FILE" "${CMD[@]}"
 
-  BEST_RUN="$("$PYTHON_BIN" - "$OUTPUTS_ROOT" "$TARGET" "$SPLIT_NAME" <<'PY'
-from pathlib import Path
-import sys
-root = Path(sys.argv[1]) / 'step6' / sys.argv[2] / sys.argv[3]
-cands = sorted(root.glob('*/checkpoints/best.pt'), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
-print(str(cands[0].parent.parent.resolve()) if cands else '')
-PY
-)"
-  [[ -n "$BEST_RUN" ]] || manual_fail_preflight "no trained run with checkpoints/best.pt found for split $SPLIT_NAME"
-  manual_require_file "$BEST_RUN/artifacts/feature_schema.json" "training must write feature schema for screening"
-  manual_require_file "$BEST_RUN/predictions/test_predictions.parquet" "training must write test predictions for evaluation"
+  manual_require_file "$RUN_DIR/checkpoints/best.pt" "training failed to produce best checkpoint; rerun step06_train_causal.sh"
+  manual_require_file "$RUN_DIR/artifacts/feature_schema.json" "training failed to write feature schema; rerun step06_train_causal.sh"
+  manual_require_file "$RUN_DIR/predictions/test_predictions.parquet" "training failed to write test predictions; rerun step06_train_causal.sh"
 
-  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/run_pointer.json" "$BEST_RUN" "step06_train_causal"
-  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$TARGET/latest_run.json" "$BEST_RUN" "step06_train_causal"
-  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$TARGET/$SPLIT_NAME/latest_run.json" "$BEST_RUN" "step06_train_causal"
-  LAST_RUN="$BEST_RUN"
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/run_pointer.json" "$RUN_DIR" "step06_train_causal"
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$TARGET/latest_run.json" "$RUN_DIR" "step06_train_causal"
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$TARGET/$SPLIT_NAME/latest_run.json" "$RUN_DIR" "step06_train_causal"
+  LAST_RUN="$RUN_DIR"
 done
 
 [[ -n "$LAST_RUN" ]] || manual_fail_preflight "step06 completed without producing runs"

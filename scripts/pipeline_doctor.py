@@ -8,6 +8,8 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from data_graph import GraphBuildConfig, dataframe_to_graphs
+
 
 def cols_ok(path: Path, required: list[str]) -> tuple[bool, str]:
     if not path.exists():
@@ -25,6 +27,46 @@ def pointer_ok(path: Path) -> tuple[bool, str, str | None]:
     if not run_dir:
         return False, f"pointer missing run_dir: {path}", None
     return True, "ok", str(run_dir)
+
+
+
+
+def current_feature_dims() -> tuple[int, int]:
+    probe = pd.DataFrame({"molecule_id": ["schema_probe"], "smiles": ["CC"], "y_dummy": [0.0], "env_id_manual": [0]})
+    graphs = dataframe_to_graphs(probe, GraphBuildConfig(id_col="molecule_id", smiles_col="smiles", label_col="y_dummy", env_col="env_id_manual"))
+    if not graphs:
+        return -1, -1
+    return int(graphs[0].x.shape[1]), int(graphs[0].edge_attr.shape[1])
+
+
+def step06_09_compatibility(out: Path, target: str) -> tuple[bool, str]:
+    target_latest = out / "step6" / target / "latest_run.json"
+    ok, detail, run_dir = pointer_ok(target_latest)
+    if not ok:
+        return False, detail
+    run_path = Path(run_dir)
+    ckpt = run_path / "checkpoints" / "best.pt"
+    schema = run_path / "artifacts" / "feature_schema.json"
+    if not run_path.exists():
+        return False, f"pointer run_dir does not exist: {run_path}"
+    if not ckpt.exists():
+        return False, f"missing checkpoint: {ckpt}"
+    if not schema.exists():
+        return False, f"missing feature schema: {schema}"
+    saved = json.loads(schema.read_text(encoding="utf-8"))
+    saved_node = int(saved.get("node_feature_dim", -1))
+    saved_edge = int(saved.get("edge_feature_dim", -1))
+    current_node, current_edge = current_feature_dims()
+    if current_node < 0 or current_edge < 0:
+        return False, "failed to compute current code featurization dimensions"
+    if saved_node != current_node or saved_edge != current_edge:
+        return False, (
+            "feature schema mismatch: "
+            f"saved node_dim={saved_node}, edge_dim={saved_edge}; "
+            f"current node_dim={current_node}, edge_dim={current_edge}. "
+            "Re-run step06 before step09."
+        )
+    return True, f"run_dir={run_path}; node_dim={saved_node}; edge_dim={saved_edge}"
 
 
 def step2_contract_ok(row_path: Path, max_value_nm: float) -> tuple[bool, str]:
@@ -87,12 +129,10 @@ def main() -> int:
         failed += print_check(f"step04_{split}_train_ids", *cols_ok(out / "step4" / split / "train_ids.csv", ["molecule_id"]))
 
     target_latest = out / "step6" / target / "latest_run.json"
-    ok, detail, run_dir = pointer_ok(target_latest)
+    ok, detail, _ = pointer_ok(target_latest)
     failed += print_check("step06_target_pointer", ok, detail)
-    if run_dir:
-        run_path = Path(run_dir)
-        failed += print_check("run_checkpoint", (run_path / "checkpoints" / "best.pt").exists(), str(run_path / "checkpoints" / "best.pt"))
-        failed += print_check("run_feature_schema", (run_path / "artifacts" / "feature_schema.json").exists(), str(run_path / "artifacts" / "feature_schema.json"))
+    compat_ok, compat_detail = step06_09_compatibility(out, target)
+    failed += print_check("step06_09_compatibility", compat_ok, compat_detail)
 
     failed += print_check("step08a_external", *cols_ok(external_parquet, ["smiles_canonical", "y_inhib_active"]))
     return 1 if failed else 0

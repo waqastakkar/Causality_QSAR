@@ -88,6 +88,54 @@ def _infer_model_dims(state_dict: dict[str, torch.Tensor]) -> dict[str, int]:
     }
 
 
+def _current_feature_dims(df: pd.DataFrame) -> tuple[int, int]:
+    work = df.copy()
+    if "molecule_id" not in work.columns:
+        work["molecule_id"] = [f"ext_{i}" for i in range(len(work))]
+    if "env_id_manual" not in work.columns:
+        work["env_id_manual"] = 0
+    if "y_dummy" not in work.columns:
+        work["y_dummy"] = 0.0
+
+    gcfg = GraphBuildConfig(
+        smiles_col="smiles_canonical" if "smiles_canonical" in work.columns else "smiles",
+        id_col="molecule_id",
+        label_col="y_dummy",
+        env_col="env_id_manual",
+    )
+    graphs = dataframe_to_graphs(work, gcfg)
+    if not graphs:
+        raise ValueError("No molecules could be featurized from external_parquet; cannot validate feature schema")
+    node_dim = int(graphs[0].x.shape[1])
+    edge_dim = int(graphs[0].edge_attr.shape[1])
+    return node_dim, edge_dim
+
+
+def _validate_checkpoint_schema(run_dir: Path, external: pd.DataFrame) -> tuple[int, int]:
+    schema_path = run_dir / "artifacts" / "feature_schema.json"
+    if not schema_path.exists():
+        raise FileNotFoundError(
+            f"Missing required feature schema at {schema_path}. Re-run Step 06 with the current code."
+        )
+    saved_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    if "node_feature_dim" not in saved_schema or "edge_feature_dim" not in saved_schema:
+        raise ValueError(
+            f"Invalid feature schema at {schema_path}: expected node_feature_dim and edge_feature_dim. "
+            "Re-run Step 06 with the current code."
+        )
+    saved_node = int(saved_schema["node_feature_dim"])
+    saved_edge = int(saved_schema["edge_feature_dim"])
+    current_node, current_edge = _current_feature_dims(external)
+    if saved_node != current_node or saved_edge != current_edge:
+        raise ValueError(
+            "Checkpoint feature schema mismatch: "
+            f"run was trained with node_dim={saved_node}, edge_dim={saved_edge}, "
+            f"but current code produces node_dim={current_node}, edge_dim={current_edge}. "
+            "Re-run Step 06 with the current code."
+        )
+    return current_node, current_edge
+
+
 def _predict_pic50(model, df: pd.DataFrame, batch_size: int = 128) -> pd.DataFrame:
     work = df.copy()
     if "molecule_id" not in work.columns:
@@ -155,12 +203,12 @@ def main() -> None:
     if "y_inhib_active" not in external.columns:
         raise ValueError("external_parquet must contain y_inhib_active")
 
+    node_dim, edge_dim = _validate_checkpoint_schema(run_dir, external)
+
     ckpt_path = run_dir / args.checkpoint
     state = torch.load(ckpt_path, map_location="cpu")
     dims = _infer_model_dims(state)
 
-    node_dim = 129
-    edge_dim = 7
     cfg = _load_training_cfg(run_dir)
     model = CausalQSARModel(
         node_dim=node_dim,

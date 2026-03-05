@@ -31,6 +31,13 @@
 - Step05/06 publish latest pointers at `outputs/step6/<target>/latest_run.json` and `outputs/step6/<target>/<split>/latest_run.json`.
 - Step09/10 resolve those pointers unless `run_dir` is explicitly provided.
 
+
+## Step 06/09 feature-schema compatibility
+
+- Never reuse an old Step 06 checkpoint after featurization or model-input schema changes.
+- Step 06 must produce `checkpoints/best.pt`, `artifacts/feature_schema.json`, and `predictions/test_predictions.parquet` before latest pointers are updated.
+- Step 09 reads the selected Step 06 `artifacts/feature_schema.json` and fails early if saved dimensions differ from current featurization code dimensions.
+
 ## Smoke mode configuration
 
 - Smoke runs must use `configs/ptp1b_smoke.yaml` or pass `smoke=true` override with `configs/ptp1b.yaml`.
