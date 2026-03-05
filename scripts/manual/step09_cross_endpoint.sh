@@ -34,7 +34,7 @@ fi
 
 EXTERNAL_PARQUET="data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet"
 manual_require_file "$EXTERNAL_PARQUET" "run step08a_prepare_external_inhibition.sh first"
-manual_require_columns "$PYTHON_BIN" "$EXTERNAL_PARQUET" "smiles_canonical,y_inhib_active"
+manual_require_columns "$PYTHON_BIN" "$EXTERNAL_PARQUET" "smiles_canonical,y_inhib_active,standard_relation_norm"
 manual_require_file "$RUN_DIR/checkpoints/best.pt"
 CMD=("$PYTHON_BIN" "scripts/evaluate_cross_endpoint.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--external_parquet" "$EXTERNAL_PARQUET" "--outdir" "$STEP_OUT")
 BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"

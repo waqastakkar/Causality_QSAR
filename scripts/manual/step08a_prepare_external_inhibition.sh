@@ -37,6 +37,6 @@ CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
 manual_require_file "$OUTDIR/data/inhibition_external_final.parquet" "external prep output contract"
-manual_require_columns "$PYTHON_BIN" "$OUTDIR/data/inhibition_external_final.parquet" "smiles_canonical,y_inhib_active"
+manual_require_columns "$PYTHON_BIN" "$OUTDIR/data/inhibition_external_final.parquet" "smiles_canonical,y_inhib_active,standard_relation_norm"
 
 echo "Saved inhibition_external_final.parquet" | tee -a "$LOG_FILE"
