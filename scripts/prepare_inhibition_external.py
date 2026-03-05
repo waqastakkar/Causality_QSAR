@@ -143,10 +143,10 @@ def main() -> None:
     print(f"[prepare_inhibition_external] detected delimiter: '{detected_delimiter}'")
     smi_col = resolve_col(raw, ["Smiles", "smiles", "canonical_smiles"])
     print(f"[prepare_inhibition_external] resolved smiles column: {smi_col}")
-    type_col = resolve_col(raw, ["Standard Type"])
-    unit_col = resolve_col(raw, ["Standard Units"])
+    type_col = resolve_col(raw, ["Standard Type", "standard_type"])
+    unit_col = resolve_col(raw, ["Standard Units", "standard_units"])
     rel_col = resolve_col(raw, ["Standard Relation", "standard_relation"])
-    value_col = resolve_col(raw, ["Standard Value"])
+    value_col = resolve_col(raw, ["Standard Value", "standard_value"])
     pchembl_col = resolve_col(raw, ["pChEMBL Value"], required=False)
     mol_id_col = resolve_col(raw, ["Molecule ChEMBL ID", "molecule_chembl_id", "molecule_id"], required=False)
 
@@ -159,7 +159,7 @@ def main() -> None:
     relation_allowed = parsed["standard_relation_norm"].isin(["=", ">", ">="])
     keep = (
         parsed[smi_col].notna()
-        & (parsed[type_col].astype(str).str.strip().str.lower() == "inhibition")
+        & (parsed[type_col].astype(str).str.strip().str.lower().str.contains("inhibition"))
         & (parsed[unit_col].astype(str).str.strip() == "%")
         & parsed["inhib_pct_raw"].notna()
         & parsed["inhib_pct_raw"].between(0, 100, inclusive="both")
