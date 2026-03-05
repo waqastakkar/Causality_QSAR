@@ -33,6 +33,42 @@ if [[ ! -f "$RULES_PARQUET" ]]; then
   manual_run_with_log "$LOG_FILE" "${BUILD_CMD[@]}"
 fi
 
+RULE_STATS_CSV="$STEP_OUT/rules/rule_stats.csv"
+manual_require_file "$RULE_STATS_CSV" "missing rules stats after build; expected $RULE_STATS_CSV"
+N_RULES_AFTER_MIN_SUPPORT="$($PYTHON_BIN - "$RULE_STATS_CSV" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+stats_path = Path(sys.argv[1])
+with stats_path.open(newline='', encoding='utf-8') as f:
+    rows = list(csv.DictReader(f))
+
+value = None
+for row in rows:
+    if row.get('metric') == 'n_rules_after_min_support':
+        value = row.get('value')
+        break
+
+if value is None:
+    raise SystemExit(f"rule_stats.csv missing metric 'n_rules_after_min_support': {stats_path}")
+
+try:
+    print(int(float(value)))
+except ValueError as exc:
+    raise SystemExit(
+        f"Invalid n_rules_after_min_support value '{value}' in {stats_path}"
+    ) from exc
+PY
+)"
+
+if [[ "$N_RULES_AFTER_MIN_SUPPORT" -eq 0 ]]; then
+  FALLBACK_BUILD_CMD=("$PYTHON_BIN" "scripts/build_mmp_rules.py" "--target" "$TARGET" "--input_parquet" "$DATASET_PARQUET" "--outdir" "$STEP_OUT" "--min_support" "1")
+  FALLBACK_BUILD_CMD+=("${STYLE_FLAGS[@]}")
+  manual_run_with_log "$LOG_FILE" "${FALLBACK_BUILD_CMD[@]}"
+  manual_require_file "$RULES_PARQUET" "missing regenerated rules parquet after fallback rebuild"
+fi
+
 CMD=("$PYTHON_BIN" "scripts/generate_counterfactuals.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--dataset_parquet" "$DATASET_PARQUET" "--mmp_rules_parquet" "$RULES_PARQUET" "--outdir" "$STEP_OUT")
 BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
 if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
