@@ -37,6 +37,7 @@
 - Never reuse an old Step 06 checkpoint after featurization or model-input schema changes.
 - Step 06 must produce `checkpoints/best.pt`, `artifacts/feature_schema.json`, and `predictions/test_predictions.parquet` before latest pointers are updated.
 - Step 09 reads the selected Step 06 `artifacts/feature_schema.json` and fails early if saved dimensions differ from current featurization code dimensions.
+- Step 09 is an external active/inactive inhibition evaluation: it keeps Step 05/06 regression models unchanged and converts `pIC50_hat` to binary calls for external validation (default threshold `5.0`; inhibition active threshold `50%`).
 
 ## Smoke mode configuration
 
