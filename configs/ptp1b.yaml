@@ -30,6 +30,15 @@ robustness:
   conformal_coverage: 0.90
   ad_threshold: 0.35
 
+postprocess:
+  primary_endpoint: IC50
+  allowed_relations_primary: ["="]
+  units_primary: [nM, uM]
+  max_value_nM: 1.0e9
+  aggregate: median
+  secondary_endpoints: [Ki]
+  threshold: 6.0
+
 screening:
   input_format: smi
   smi_layout: smiles_id

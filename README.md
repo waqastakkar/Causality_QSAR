@@ -213,6 +213,14 @@ Equivalent override form:
 bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml smoke=true training.splits_to_run=scaffold_bm
 ```
 
+
+### Step 2 endpoint policy (default)
+
+- Primary training/screening dataset is **IC50-only** with `standard_relation == "="` and standardized units in **nM** (uM is converted to nM).
+- Censored rows (`<`, `>`, etc.), non-positive values, unsupported units, and extreme values above `postprocess.max_value_nM` are dropped from the primary dataset.
+- `pIC50` is computed as `9 - log10(IC50_nM)` and `activity_label` is generated from the configured postprocess threshold.
+- Ki/Kd are not mixed into the primary labels. Optional secondary endpoint datasets are emitted separately and are not consumed by Step3+ unless explicitly configured.
+
 ### Manual step commands (copy/paste)
 
 ```bash
@@ -239,7 +247,7 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 | Step | Script | Main input(s) | Main output(s) |
 |---|---|---|---|
 | 1 | `step01_extract.sh` | `paths.chembl_sqlite` | `outputs/step1/<target>_qsar_ready.csv` |
-| 2 | `step02_postprocess.sh` | `outputs/step1/<target>_qsar_ready.csv` | `outputs/step2/*` |
+| 2 | `step02_postprocess.sh` | `outputs/step1/<target>_qsar_ready.csv` (mixed assay records) | primary IC50 outputs (`row_level_primary.csv`, `compound_level_with_properties.csv`) + optional secondary endpoint files (e.g., `row_level_secondary_ki.csv`) |
 | 3 | `step03_assemble_environments.sh` | step1/step2 CSVs + env rules | `outputs/step3/multienv_compound_level.parquet` |
 | 4 | `step04_generate_splits.sh` | config + step3 dataset | `outputs/step4/<split>/*` + `outputs/step4/splits_manifest.json` |
 | 5 | `step05_benchmark.sh` | step3 dataset + selected step4 splits (`training.splits_to_run`) | `outputs/step5/<target>/<split>/<run_id>/*` + latest-run pointers |
