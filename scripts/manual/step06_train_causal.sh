@@ -20,6 +20,8 @@ OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; SPLIT_NAME="${CFG[2]}"; TASK="${CF
 STEP_OUT="$OUTPUTS_ROOT/step6"
 LOG_FILE="$STEP_OUT/step06_train_causal.log"
 mkdir -p "$STEP_OUT"
+manual_require_file "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "run step03 first"
+manual_require_dir "$OUTPUTS_ROOT/step4/$SPLIT_NAME" "run step04 first"
 CMD=("$PYTHON_BIN" "scripts/train_causal_qsar.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL" "--epochs" "$EPOCHS" "--early_stopping_patience" "$PATIENCE")
 if [[ -n "$SEED1" ]]; then CMD+=("--seed" "$SEED1"); fi
 BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
@@ -27,3 +29,14 @@ if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
+BEST_RUN="$("$PYTHON_BIN" - "$OUTPUTS_ROOT" "$TARGET" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1]) / 'step6' / sys.argv[2]
+cands = sorted(root.glob('**/checkpoints/best.pt'), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
+print(str(cands[0].parent.parent.resolve()) if cands else '')
+PY
+)"
+[[ -n "$BEST_RUN" ]] || manual_fail_preflight "no trained run with checkpoints/best.pt found in $OUTPUTS_ROOT/step6/$TARGET"
+manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/run_pointer.json" "$BEST_RUN" "step06_train_causal"
+manual_require_file "$BEST_RUN/artifacts/feature_schema.json" "training must write feature schema for screening"

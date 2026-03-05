@@ -11,25 +11,21 @@ cfg = yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8')) or {}
 out_root = Path(cfg.get('paths', {}).get('outputs_root', 'outputs')).resolve()
 target = str(cfg['target'])
 screening = cfg.get('screening', {}) if isinstance(cfg.get('screening'), dict) else {}
-runs6 = out_root / 'step6' / target
-runs5 = out_root / 'step5' / target
-for root in [runs6, runs5]:
-    cands = sorted(root.glob('**/checkpoints/best.pt')) if root.exists() else []
-    if cands:
-        run_dir = cands[0].parent.parent
-        break
-else:
-    run_dir = runs6
-print(str(out_root)); print(target); print(str(run_dir));
+print(str(out_root)); print(target);
 print('' if screening.get('cns_mpo_threshold') is None else str(screening.get('cns_mpo_threshold')))
 PY
 )
-OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; RUN_DIR="${CFG[2]}"; CNS_MPO="${CFG[3]}"
+OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; CNS_MPO="${CFG[2]}"
+RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step6/run_pointer.json")"
+[[ -n "$RUN_DIR" ]] || RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step5/run_pointer.json")"
+[[ -n "$RUN_DIR" ]] || manual_fail_preflight "missing run pointer (expected outputs/step6/run_pointer.json or outputs/step5/run_pointer.json)"
 STEP_OUT="$OUTPUTS_ROOT/step7"
 LOG_FILE="$STEP_OUT/step07_counterfactuals.log"
 mkdir -p "$STEP_OUT/rules" "$STEP_OUT/candidates"
 RULES_PARQUET="$STEP_OUT/rules/mmp_rules.parquet"
 DATASET_PARQUET="$OUTPUTS_ROOT/step3/multienv_compound_level.parquet"
+manual_require_file "$DATASET_PARQUET" "run step03 first"
+manual_require_file "$RUN_DIR/checkpoints/best.pt" "run training first"
 
 if [[ ! -f "$RULES_PARQUET" ]]; then
   BUILD_CMD=("$PYTHON_BIN" "scripts/build_mmp_rules.py" "--target" "$TARGET" "--input_parquet" "$DATASET_PARQUET" "--outdir" "$STEP_OUT")
@@ -46,8 +42,5 @@ manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
 
 for output in generated_counterfactuals.parquet filtered_counterfactuals.parquet ranked_topk.parquet; do
-  if [[ ! -f "$STEP_OUT/candidates/$output" ]]; then
-    echo "[step7] ERROR: missing expected output file: $STEP_OUT/candidates/$output" >&2
-    exit 1
-  fi
+  [[ -f "$STEP_OUT/candidates/$output" ]] || manual_fail_preflight "missing expected output file: $STEP_OUT/candidates/$output"
 done

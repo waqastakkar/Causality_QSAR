@@ -196,6 +196,7 @@ bash scripts/manual/step05_benchmark.sh configs/ptp1b.yaml
 bash scripts/manual/step06_train_causal.sh configs/ptp1b.yaml
 bash scripts/manual/step07_counterfactuals.sh configs/ptp1b.yaml
 bash scripts/manual/step08_evaluate_runs.sh configs/ptp1b.yaml
+bash scripts/manual/step08a_prepare_external_inhibition.sh configs/ptp1b.yaml
 bash scripts/manual/step09_cross_endpoint.sh configs/ptp1b.yaml
 bash scripts/manual/step10_interpret.sh configs/ptp1b.yaml
 bash scripts/manual/step11_robustness.sh configs/ptp1b.yaml
@@ -217,7 +218,8 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 | 6 | `step06_train_causal.sh` | step3 dataset + step4 splits | `outputs/step6/<target>/*` |
 | 7 | `step07_counterfactuals.sh` | run dir + step3 parquet + MMP rules | `outputs/step7/candidates/*.parquet` |
 | 8 | `step08_evaluate_runs.sh` | runs root + step3/step4 | `outputs/step8/*` |
-| 9 | `step09_cross_endpoint.sh` | run checkpoint + external parquet | `outputs/step9/*` or `step9_noop.txt` |
+| 8a | `step08a_prepare_external_inhibition.sh` | external inhibition CSV + step3 parquet + splits | `data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet` |
+| 9 | `step09_cross_endpoint.sh` | run pointer + canonical external parquet | `outputs/step9/*` |
 | 10 | `step10_interpret.sh` | run checkpoint + step3 parquet | `outputs/step10/*` or `step10_noop.txt` |
 | 11 | `step11_robustness.sh` | config | `outputs/step11/*` |
 | 12 | `step12_screen_library.sh` | config + screening inputs | `outputs/step12/*` |
@@ -228,6 +230,17 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 ### CLI status (deprecated)
 
 The old `ptp1bqsar` CLI (`check`, `step`, `run`, `manuscript`) remains in the codebase for compatibility, but new documentation and recommended execution now use `scripts/manual/*.sh`.
+
+
+### Pipeline doctor
+
+Run a compatibility/preflight diagnosis at any time:
+
+```bash
+python scripts/pipeline_doctor.py configs/ptp1b.yaml
+```
+
+This checks core file/column contracts and run-pointer consistency used by manual mode.
 
 ## Output folders and file explanations
 

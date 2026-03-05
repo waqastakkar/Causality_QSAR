@@ -13,8 +13,17 @@ print(str(out_root)); print(str(cfg['target'])); print(str(training.get('task', 
 PY
 )
 OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; TASK="${CFG[2]}"; LABEL_COL="${CFG[3]}"; ENV_COL="${CFG[4]}"
-RUNS_ROOT="$OUTPUTS_ROOT/step6/$TARGET"; [[ -d "$RUNS_ROOT" ]] || RUNS_ROOT="$OUTPUTS_ROOT/step5/$TARGET"
+RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step6/run_pointer.json")"
+RUNS_ROOT="$OUTPUTS_ROOT/step6/$TARGET"
+if [[ -z "$RUN_DIR" ]]; then
+  RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$OUTPUTS_ROOT/step5/run_pointer.json")"
+  RUNS_ROOT="$OUTPUTS_ROOT/step5/$TARGET"
+fi
+[[ -n "$RUN_DIR" ]] || manual_fail_preflight "missing run pointer for evaluation"
 STEP_OUT="$OUTPUTS_ROOT/step8"; LOG_FILE="$STEP_OUT/step08_evaluate_runs.log"; mkdir -p "$STEP_OUT"
+manual_require_dir "$RUNS_ROOT"
+manual_require_file "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet"
+manual_require_dir "$OUTPUTS_ROOT/step4"
 CMD=("$PYTHON_BIN" "scripts/evaluate_runs.py" "--target" "$TARGET" "--runs_root" "$RUNS_ROOT" "--splits_dir" "$OUTPUTS_ROOT/step4" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL")
 BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
 if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi

@@ -14,6 +14,48 @@ manual_parse_common() {
   fi
 }
 
+manual_fail_preflight() {
+  local msg="$1"
+  echo "[$(basename "$0")] ERROR: $msg" >&2
+  exit 2
+}
+
+manual_require_file() {
+  local path="$1"
+  local hint="${2:-}"
+  [[ -f "$path" ]] || manual_fail_preflight "missing required file: $path${hint:+ ($hint)}"
+}
+
+manual_require_dir() {
+  local path="$1"
+  local hint="${2:-}"
+  [[ -d "$path" ]] || manual_fail_preflight "missing required directory: $path${hint:+ ($hint)}"
+}
+
+manual_require_columns() {
+  local python_bin="$1"
+  local file_path="$2"
+  local columns_csv="$3"
+  "$python_bin" - "$file_path" "$columns_csv" <<'PY' || exit 2
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+path = Path(sys.argv[1])
+required = [c for c in sys.argv[2].split(',') if c]
+if not path.exists():
+    raise SystemExit(f"missing required tabular file: {path}")
+if path.suffix.lower() == '.parquet':
+    df = pd.read_parquet(path)
+else:
+    df = pd.read_csv(path)
+missing = [c for c in required if c not in df.columns]
+if missing:
+    raise SystemExit(f"missing required columns in {path}: {missing}; available={list(df.columns)}")
+PY
+}
+
 manual_python_for_config() {
   local config_path="$1"
   local bootstrap_py="${PIPELINE_PYTHON:-python}"
@@ -105,4 +147,34 @@ manual_run_with_log() {
   printf '  %q' "$@"
   printf '\n'
   "$@" 2>&1 | tee -a "$log_file"
+}
+
+manual_write_run_pointer() {
+  local python_bin="$1"
+  local pointer_path="$2"
+  local run_dir="$3"
+  local producer_step="$4"
+  "$python_bin" - "$pointer_path" "$run_dir" "$producer_step" <<'PY'
+import json, sys
+from pathlib import Path
+ptr = Path(sys.argv[1]); run_dir = str(Path(sys.argv[2]).resolve()); step = sys.argv[3]
+ptr.parent.mkdir(parents=True, exist_ok=True)
+ptr.write_text(json.dumps({"run_dir": run_dir, "producer_step": step}, indent=2), encoding="utf-8")
+print(f"Wrote run pointer: {ptr} -> {run_dir}")
+PY
+}
+
+manual_read_run_pointer() {
+  local python_bin="$1"
+  local pointer_path="$2"
+  "$python_bin" - "$pointer_path" <<'PY'
+import json, sys
+from pathlib import Path
+ptr = Path(sys.argv[1])
+if not ptr.exists():
+    print("")
+    raise SystemExit(0)
+data = json.loads(ptr.read_text(encoding='utf-8'))
+print(data.get('run_dir', ''))
+PY
 }

@@ -20,8 +20,21 @@ OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; SPLIT_NAME="${CFG[2]}"; TASK="${CF
 STEP_OUT="$OUTPUTS_ROOT/step5"
 LOG_FILE="$STEP_OUT/step05_benchmark.log"
 mkdir -p "$STEP_OUT"
+manual_require_file "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "run step03 first"
+manual_require_dir "$OUTPUTS_ROOT/step4/$SPLIT_NAME" "run step04 first"
 CMD=("$PYTHON_BIN" "scripts/run_benchmark.py" "--target" "$TARGET" "--dataset_parquet" "$OUTPUTS_ROOT/step3/multienv_compound_level.parquet" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_names" "$SPLIT_NAME" "--outdir" "$STEP_OUT" "--task" "$TASK" "--label_col" "$LABEL_COL" "--env_col" "$ENV_COL")
 if [[ -n "$SEEDS" ]]; then CMD+=("--seeds" "$SEEDS"); fi
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
+BEST_RUN="$("$PYTHON_BIN" - "$OUTPUTS_ROOT" "$TARGET" <<'PY'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1]) / 'step5' / sys.argv[2]
+cands = sorted(root.glob('**/checkpoints/best.pt'), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []
+print(str(cands[0].parent.parent.resolve()) if cands else '')
+PY
+)"
+if [[ -n "$BEST_RUN" ]]; then
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/run_pointer.json" "$BEST_RUN" "step05_benchmark"
+fi
