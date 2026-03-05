@@ -3,6 +3,10 @@ set -euo pipefail
 source "$(dirname "$0")/_helpers.sh"
 manual_parse_common "$@"
 PYTHON_BIN="$(manual_python_for_config "$CONFIG")"
+SMOKE_ENABLED="$(manual_smoke_enabled "$PYTHON_BIN" "$CONFIG" "${EXTRA_ARGS[@]}")"
+if [[ "$SMOKE_ENABLED" == "1" ]]; then
+  manual_apply_smoke_overrides EXTRA_ARGS
+fi
 manual_style_flags "$CONFIG"
 readarray -t CFG < <("$PYTHON_BIN" - "$CONFIG" <<'PY'
 import sys, yaml
@@ -17,6 +21,10 @@ print(','.join(str(s) for s in seeds))
 PY
 )
 OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; TASK="${CFG[2]}"; LABEL_COL="${CFG[3]}"; ENV_COL="${CFG[4]}"; SEEDS="${CFG[5]}"
+OVERRIDE_SEEDS="$(manual_get_override training.seeds "${EXTRA_ARGS[@]}")"
+if [[ -n "$OVERRIDE_SEEDS" ]]; then
+  SEEDS="${OVERRIDE_SEEDS//[[]/}"; SEEDS="${SEEDS//[]]/}"; SEEDS="${SEEDS// /}"
+fi
 STEP_OUT="$OUTPUTS_ROOT/step5"
 LOG_FILE="$STEP_OUT/step05_benchmark.log"
 mkdir -p "$STEP_OUT"

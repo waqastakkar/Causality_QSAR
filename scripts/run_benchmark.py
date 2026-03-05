@@ -26,6 +26,7 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=300)
     p.add_argument("--early_stopping_patience", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=64)
+    p.add_argument("--max_rows", type=int, default=0, help="Optional cap on rows loaded from dataset_parquet (0 disables).")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--encoder", default="gine")
     p.add_argument("--z_dim", type=int, default=128)
@@ -88,6 +89,7 @@ def main():
                     "--epochs", str(args.epochs),
                     "--early_stopping_patience", str(args.early_stopping_patience),
                     "--batch_size", str(args.batch_size),
+                    "--max_rows", str(args.max_rows),
                     "--lr", str(args.lr),
                     "--seed", str(seed),
                     "--run_id", run_id,

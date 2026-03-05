@@ -132,11 +132,69 @@ manual_append_overrides() {
   local arg
   for arg in "${_extra_ref[@]}"; do
     if [[ "$arg" == *=* ]]; then
-      _cmd_ref+=("--${arg%%=*}" "${arg#*=}")
+      local key="${arg%%=*}"
+      local value="${arg#*=}"
+      case "$key" in
+        training.splits_to_run|run_dir|runs_root|smoke)
+          ;;
+        training.epochs)
+          _cmd_ref+=("--epochs" "$value")
+          ;;
+        training.max_rows)
+          _cmd_ref+=("--max_rows" "$value")
+          ;;
+        training.seeds)
+          ;;
+        training.early_stopping_patience)
+          _cmd_ref+=("--early_stopping_patience" "$value")
+          ;;
+        *)
+          _cmd_ref+=("--$key" "$value")
+          ;;
+      esac
     else
       _cmd_ref+=("$arg")
     fi
   done
+}
+
+manual_smoke_enabled() {
+  local python_bin="$1"
+  local config_path="$2"
+  shift 2
+  "$python_bin" - "$config_path" "$@" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+config_path = Path(sys.argv[1])
+extra = sys.argv[2:]
+cfg = yaml.safe_load(config_path.read_text(encoding='utf-8')) or {}
+
+enabled = bool(cfg.get('smoke', False))
+for token in extra:
+    if token.startswith('smoke='):
+        enabled = token.split('=', 1)[1].strip().lower() in {'1', 'true', 'yes', 'on'}
+
+print('1' if enabled else '0')
+PY
+}
+
+manual_apply_smoke_overrides() {
+  local -n _extra_ref=$1
+  local found_epochs=""
+  local found_max_rows=""
+  local found_seeds=""
+  local arg
+  for arg in "${_extra_ref[@]}"; do
+    [[ "$arg" == training.epochs=* ]] && found_epochs=1
+    [[ "$arg" == training.max_rows=* ]] && found_max_rows=1
+    [[ "$arg" == training.seeds=* ]] && found_seeds=1
+  done
+  [[ -n "$found_epochs" ]] || _extra_ref+=("training.epochs=1")
+  [[ -n "$found_max_rows" ]] || _extra_ref+=("training.max_rows=200")
+  [[ -n "$found_seeds" ]] || _extra_ref+=("training.seeds=1")
 }
 
 manual_run_with_log() {

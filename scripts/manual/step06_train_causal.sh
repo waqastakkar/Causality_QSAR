@@ -3,6 +3,10 @@ set -euo pipefail
 source "$(dirname "$0")/_helpers.sh"
 manual_parse_common "$@"
 PYTHON_BIN="$(manual_python_for_config "$CONFIG")"
+SMOKE_ENABLED="$(manual_smoke_enabled "$PYTHON_BIN" "$CONFIG" "${EXTRA_ARGS[@]}")"
+if [[ "$SMOKE_ENABLED" == "1" ]]; then
+  manual_apply_smoke_overrides EXTRA_ARGS
+fi
 manual_style_flags "$CONFIG"
 readarray -t CFG < <("$PYTHON_BIN" - "$CONFIG" <<'PY'
 import sys, yaml
@@ -17,6 +21,11 @@ print(str(training.get('epochs', 300))); print(str(training.get('early_stopping_
 PY
 )
 OUTPUTS_ROOT="${CFG[0]}"; TARGET="${CFG[1]}"; TASK="${CFG[2]}"; LABEL_COL="${CFG[3]}"; ENV_COL="${CFG[4]}"; EPOCHS="${CFG[5]}"; PATIENCE="${CFG[6]}"; SEED1="${CFG[7]}"
+OVERRIDE_SEEDS="$(manual_get_override training.seeds "${EXTRA_ARGS[@]}")"
+if [[ -n "$OVERRIDE_SEEDS" ]]; then
+  OVERRIDE_SEEDS="${OVERRIDE_SEEDS//[[]/}"; OVERRIDE_SEEDS="${OVERRIDE_SEEDS//[]]/}"; OVERRIDE_SEEDS="${OVERRIDE_SEEDS// /}"
+  SEED1="${OVERRIDE_SEEDS%%,*}"
+fi
 STEP_OUT="$OUTPUTS_ROOT/step6"
 LOG_FILE="$STEP_OUT/step06_train_causal.log"
 mkdir -p "$STEP_OUT"

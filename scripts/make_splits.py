@@ -67,7 +67,7 @@ def stratified_split_ids(df: pd.DataFrame, seed: int, train_frac: float, val_fra
     val_idx: list[int] = []
     test_idx: list[int] = []
     for _, grp in df.groupby(stratify_col, dropna=False):
-        ids = grp.index.to_numpy()
+        ids = grp.index.to_numpy(copy=True)
         rng.shuffle(ids)
         n = len(ids)
         n_train = int(round(n * train_frac))
