@@ -10,6 +10,9 @@ from typing import Any
 import pandas as pd
 import yaml
 
+from bbb_rules import add_bbb_metrics
+from property_calc import compute_properties
+
 try:
     from rdkit import Chem
     from rdkit.Chem.Scaffolds import MurckoScaffold
@@ -19,6 +22,19 @@ except Exception:  # pragma: no cover
 
 
 DEFAULT_ENV_KEYS = ["assay_type", "species", "readout", "publication", "chemistry_regime", "series"]
+BBB_ANNOTATION_COLUMNS = [
+    "molecule_id",
+    "canonical_smiles",
+    "is_bbb_like",
+    "MW",
+    "TPSA",
+    "HBD",
+    "HBA",
+    "RB",
+    "LogP",
+    "cns_mpo",
+    "bbb_rule_version",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,6 +148,39 @@ def compute_chemistry_regime(df: pd.DataFrame, rules: dict[str, Any]) -> pd.Seri
     return df.apply(classify, axis=1)
 
 
+def ensure_bbb_input_properties(df: pd.DataFrame, smiles_col: str) -> pd.DataFrame:
+    out = df.copy()
+    needed = ["MW", "LogP", "TPSA", "HBD", "HBA", "RotB"]
+    if all(c in out.columns for c in needed):
+        return out
+
+    calc_base = out[[smiles_col]].copy()
+    calc_base = calc_base.rename(columns={smiles_col: "canonical_smiles"})
+    calculated = compute_properties(calc_base, smiles_col="canonical_smiles")
+    for c in needed:
+        if c not in out.columns:
+            out[c] = calculated[c]
+    return out
+
+
+def build_bbb_annotations(df: pd.DataFrame, rules: dict[str, Any], smiles_col: str) -> pd.DataFrame:
+    bbb_df = ensure_bbb_input_properties(df, smiles_col=smiles_col)
+    bbb_df = add_bbb_metrics(bbb_df)
+
+    bbb_df["is_bbb_like"] = compute_chemistry_regime(bbb_df, rules).eq("bbb-like")
+    bbb_df["RB"] = pd.to_numeric(bbb_df.get("RotB"), errors="coerce")
+    bbb_df["bbb_rule_version"] = f"bbb_rules::{json.dumps(rules, sort_keys=True)}"
+
+    if smiles_col != "canonical_smiles":
+        bbb_df["canonical_smiles"] = bbb_df[smiles_col]
+
+    for col in BBB_ANNOTATION_COLUMNS:
+        if col not in bbb_df.columns:
+            bbb_df[col] = pd.NA
+
+    return bbb_df[BBB_ANNOTATION_COLUMNS].sort_values("molecule_id").reset_index(drop=True)
+
+
 def main() -> None:
     args = parse_args()
     outdir = Path(args.outdir)
@@ -223,6 +272,11 @@ def main() -> None:
 
     merged_row.to_parquet(outdir / "multienv_row_level.parquet", index=False)
     comp_df.to_parquet(outdir / "multienv_compound_level.parquet", index=False)
+
+    data_outdir = outdir / "data"
+    data_outdir.mkdir(parents=True, exist_ok=True)
+    bbb_annotations = build_bbb_annotations(comp_df, rules, smiles_col=smiles_col)
+    bbb_annotations.to_parquet(data_outdir / "bbb_annotations.parquet", index=False)
 
     env_counts = comp_df.groupby("env_id", dropna=False).size().reset_index(name="count").sort_values("count", ascending=False)
     env_counts.to_csv(outdir / "env_counts.csv", index=False)

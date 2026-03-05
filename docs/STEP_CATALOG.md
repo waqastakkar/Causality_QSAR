@@ -49,3 +49,14 @@
 - Primary outputs: `outputs/step2/row_level_primary.csv`, `outputs/step2/compound_level_primary.csv`, `outputs/step2/compound_level_with_properties.csv` (legacy aliases retained).
 - Optional secondary endpoint outputs (default Ki) are written separately under `outputs/step2/row_level_secondary_<endpoint>.csv` and are not used by downstream steps unless explicitly selected.
 - Diagnostics required: before/after counts by endpoint/relation/units, pIC50 sanity range, unique molecule count, and top drop reasons.
+
+## Step 3 contract (environment assembly)
+
+- Required inputs: `outputs/step2/row_level_with_pIC50.csv`, `outputs/step2/compound_level_with_properties.csv`, `outputs/step1/<target>_qsar_ready.csv`, and BBB rules config.
+- Primary outputs: `outputs/step3/multienv_compound_level.parquet`, `outputs/step3/multienv_row_level.parquet`, and environment metadata files (`env_definitions.json`, `env_counts.csv`, `series_assignments.csv`, `env_vector_schema.json`).
+- BBB annotation artifact: `outputs/step3/data/bbb_annotations.parquet` with deterministic `molecule_id`-sorted rows and BBB/CNS properties used by downstream metrics.
+
+## Step 8 CNS subset metrics dependency
+
+- `step08_evaluate_runs.sh` passes `outputs/step3/data/bbb_annotations.parquet` (fallback: `outputs/step3/bbb_annotations.parquet`) into evaluation when present.
+- CNS subset metrics are computed from this BBB annotation artifact; if it is missing, Step 8 emits a skip warning.
