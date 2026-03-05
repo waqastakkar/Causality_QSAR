@@ -255,7 +255,7 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 | 7 | `step07_counterfactuals.sh` | run dir + step3 parquet + MMP rules | `outputs/step7/candidates/*.parquet` |
 | 8 | `step08_evaluate_runs.sh` | `run_dir` or `runs_root` + step3/step4 | `outputs/step8/*` |
 | 8a | `step08a_prepare_external_inhibition.sh` | external inhibition CSV + step3 parquet + splits | `data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet` |
-| 9 | `step09_cross_endpoint.sh` | explicit `run_dir` or split-aware latest pointer + canonical external parquet | `outputs/step9/*` |
+| 9 | `step09_cross_endpoint.sh` | explicit `run_dir` or split-aware latest pointer + canonical external parquet + Step06 `artifacts/feature_schema.json` | `outputs/step9/*` (fails early on schema mismatch) |
 | 10 | `step10_interpret.sh` | `run_dir` or `runs_root` (multi-run supported) + step3 parquet | `outputs/step10/<split>/<run_id>/*` |
 | 11 | `step11_robustness.sh` | `run_dir` or `runs_root` + step3 parquet | `outputs/step11/*` |
 | 12 | `step12_screen_library.sh` | config + screening inputs | `outputs/step12/*` |
@@ -277,6 +277,10 @@ python scripts/pipeline_doctor.py configs/ptp1b.yaml
 ```
 
 This checks core file/column contracts and run-pointer consistency used by manual mode.
+
+Feature-schema compatibility note:
+- Any featurization or model-input schema change requires rerunning Step 06 (and downstream steps).
+- Step 09 validates `artifacts/feature_schema.json` from the selected Step 06 run and fails early if dimensions are incompatible with current featurization code.
 
 ## Output folders and file explanations
 

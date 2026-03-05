@@ -14,3 +14,5 @@
   data/external/processed/ptp1b_inhibition_chembl335/data/inhibition_external_final.parquet
 - Screening must require artifacts/feature_schema.json to exist in the chosen run_dir.
 - All steps must fail with clear error messages when prerequisites are missing.
+- Never reuse Step 06 checkpoints after feature-schema or model-input changes.
+- Require a fresh Step 06 run before Step 09.
