@@ -19,6 +19,10 @@ mkdir -p "$STEP_OUT"
 OUTDIR="data/external/processed/ptp1b_inhibition_chembl335"
 RAW_INHIB_CSV="data/external/raw/ptp1b_inhibition_chembl335.csv"
 IC50_PARQUET="$OUTPUTS_ROOT/step3/multienv_compound_level.parquet"
+if [[ ! -f "$RAW_INHIB_CSV" ]]; then
+  echo "Downloading external inhibition dataset" | tee -a "$LOG_FILE"
+  "$PYTHON_BIN" "scripts/download_ptp1b_inhibition_chembl.py" 2>&1 | tee -a "$LOG_FILE"
+fi
 manual_require_file "$RAW_INHIB_CSV" "expected raw inhibition export"
 manual_require_file "$IC50_PARQUET" "run step03 first"
 manual_require_dir "$OUTPUTS_ROOT/step4" "run step04 first"
@@ -26,6 +30,7 @@ mapfile -t SPLITS < <(manual_resolve_splits_to_run "$PYTHON_BIN" "$CONFIG" "$OUT
 SPLIT_NAME="${SPLITS[0]:-}"
 [[ -n "$SPLIT_NAME" ]] || manual_fail_preflight "no split resolved for external inhibition prep"
 manual_require_dir "$OUTPUTS_ROOT/step4/$SPLIT_NAME" "run step04 first"
+echo "Processing inhibition dataset" | tee -a "$LOG_FILE"
 CMD=("$PYTHON_BIN" "scripts/prepare_inhibition_external.py" "--target" "$TARGET" "--input_csv" "$RAW_INHIB_CSV" "--ic50_parquet" "$IC50_PARQUET" "--splits_dir" "$OUTPUTS_ROOT/step4" "--split_name" "$SPLIT_NAME" "--outdir" "$OUTDIR")
 CMD+=("${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD
