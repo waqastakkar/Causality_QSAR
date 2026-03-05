@@ -145,26 +145,40 @@ def main() -> None:
     print(f"[prepare_inhibition_external] resolved smiles column: {smi_col}")
     type_col = resolve_col(raw, ["Standard Type"])
     unit_col = resolve_col(raw, ["Standard Units"])
+    rel_col = resolve_col(raw, ["Standard Relation", "standard_relation"])
     value_col = resolve_col(raw, ["Standard Value"])
     pchembl_col = resolve_col(raw, ["pChEMBL Value"], required=False)
     mol_id_col = resolve_col(raw, ["Molecule ChEMBL ID", "molecule_chembl_id", "molecule_id"], required=False)
 
     parsed = raw.copy()
+    parsed["standard_relation_norm"] = parsed[rel_col].astype(str).str.strip()
     parsed["inhib_pct_raw"] = pd.to_numeric(parsed[value_col], errors="coerce")
     parsed = add_mol_fields(parsed, smi_col)
     parsed.to_parquet(data_dir / "inhibition_raw_parsed.parquet", index=False)
 
+    relation_allowed = parsed["standard_relation_norm"].isin(["=", ">", ">="])
     keep = (
         parsed[smi_col].notna()
         & (parsed[type_col].astype(str).str.strip().str.lower() == "inhibition")
         & (parsed[unit_col].astype(str).str.strip() == "%")
         & parsed["inhib_pct_raw"].notna()
+        & parsed["inhib_pct_raw"].between(0, 100, inclusive="both")
+        & relation_allowed
         & parsed["smiles_valid"]
     )
     clean = parsed[keep].copy()
     clean["pct_out_of_range"] = (clean["inhib_pct_raw"] < 0) | (clean["inhib_pct_raw"] > 100)
-    clean["inhib_pct_clipped"] = clean["inhib_pct_raw"].clip(0, 100)
-    clean["y_inhib_active"] = (clean["inhib_pct_clipped"] >= float(args.inhib_threshold)).astype(int)
+    thresh = float(args.inhib_threshold)
+    clean["y_inhib_active"] = 0
+    clean.loc[
+        clean["standard_relation_norm"].isin([">", ">="]) & (clean["inhib_pct_raw"] > thresh),
+        "y_inhib_active",
+    ] = 1
+    clean.loc[
+        (clean["standard_relation_norm"] == "=") & (clean["inhib_pct_raw"] >= thresh),
+        "y_inhib_active",
+    ] = 1
+    clean["y_inhib_active"] = clean["y_inhib_active"].astype(int)
     if mol_id_col and mol_id_col in clean.columns:
         clean["molecule_id"] = clean[mol_id_col].astype(str)
     clean.to_parquet(data_dir / "inhibition_clean.parquet", index=False)
@@ -207,9 +221,20 @@ def main() -> None:
             {"metric": "raw_below_0", "count": int((parsed["inhib_pct_raw"] < 0).sum())},
             {"metric": "raw_above_100", "count": int((parsed["inhib_pct_raw"] > 100).sum())},
             {"metric": "clean_out_of_range_flagged", "count": int(clean["pct_out_of_range"].sum())},
+            {"metric": "raw_disallowed_relation", "count": int((~relation_allowed).sum())},
         ]
     )
     value_sanity.to_csv(reports_dir / "value_sanity.csv", index=False)
+
+    relation_counts = (
+        parsed["standard_relation_norm"]
+        .where(parsed["standard_relation_norm"].isin(["=", ">", ">=", "<", "<="]), "other")
+        .value_counts(dropna=False)
+        .reindex(["=", ">", ">=", "<", "<="], fill_value=0)
+        .rename_axis("standard_relation")
+        .reset_index(name="count")
+    )
+    relation_counts.to_csv(reports_dir / "counts_by_relation.csv", index=False)
 
     overlap = pd.DataFrame(
         [
@@ -281,8 +306,8 @@ def main() -> None:
     shift_df.to_csv(reports_dir / "shift_vs_ic50_train.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(6, 4))
-    ax.hist(clean["inhib_pct_clipped"], bins=30, alpha=0.85)
-    style_axis(ax, style, "Inhibition value distribution", "Inhibition (%) clipped", "Count")
+    ax.hist(clean["inhib_pct_raw"], bins=30, alpha=0.85)
+    style_axis(ax, style, "Inhibition value distribution", "Inhibition (%)", "Count")
     fig.tight_layout(); fig.savefig(figs_dir / "fig_inhibition_value_distribution.svg"); plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(6, 4))

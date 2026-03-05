@@ -10,6 +10,7 @@ SQL = """
 SELECT
     md.chembl_id AS molecule_chembl_id,
     cs.canonical_smiles,
+    act.standard_relation,
     act.standard_value,
     act.standard_units,
     act.standard_type,
@@ -21,8 +22,8 @@ JOIN target_dictionary td ON a.tid = td.tid
 JOIN molecule_dictionary md ON act.molregno = md.molregno
 LEFT JOIN compound_structures cs ON md.molregno = cs.molregno
 WHERE td.chembl_id = ?
-  AND act.standard_type = 'IC50'
-  AND act.standard_units = 'nM'
+  AND act.standard_type = 'Inhibition'
+  AND act.standard_units = '%'
   AND act.standard_value IS NOT NULL
   AND cs.canonical_smiles IS NOT NULL
 """
@@ -31,6 +32,7 @@ WHERE td.chembl_id = ?
 EXPECTED_COLUMNS = [
     "molecule_chembl_id",
     "canonical_smiles",
+    "standard_relation",
     "standard_value",
     "standard_units",
     "standard_type",
