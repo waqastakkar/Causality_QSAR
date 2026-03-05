@@ -41,3 +41,11 @@
   3. `bash scripts/manual/step05_benchmark.sh configs/ptp1b_smoke.yaml training.splits_to_run=scaffold_bm`
   4. `bash scripts/manual/step06_train_causal.sh configs/ptp1b_smoke.yaml training.splits_to_run=scaffold_bm`
   5. `bash scripts/manual/step08_evaluate_runs.sh configs/ptp1b_smoke.yaml`
+
+
+## Step 2 contract (QSAR postprocess)
+
+- Primary dataset: `standard_type=IC50`, `standard_relation=="="`, values normalized to nM (`uM -> nM`), positive numeric values only, and `standard_value <= postprocess.max_value_nM`.
+- Primary outputs: `outputs/step2/row_level_primary.csv`, `outputs/step2/compound_level_primary.csv`, `outputs/step2/compound_level_with_properties.csv` (legacy aliases retained).
+- Optional secondary endpoint outputs (default Ki) are written separately under `outputs/step2/row_level_secondary_<endpoint>.csv` and are not used by downstream steps unless explicitly selected.
+- Diagnostics required: before/after counts by endpoint/relation/units, pIC50 sanity range, unique molecule count, and top drop reasons.
