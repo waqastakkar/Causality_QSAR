@@ -26,6 +26,8 @@ from provenance_utils import (
 
 NATURE5 = ["#E69F00", "#009E73", "#0072B2", "#D55E00", "#CC79A7"]
 
+from screening_compat import resolve_step12_screen_outputs
+
 
 def str2bool(v: Any) -> bool:
     if isinstance(v, bool):
@@ -276,6 +278,9 @@ def build_checklist(
         f"- Missing required main tables: {missing_main_tab if missing_main_tab else 'none'}",
         f"- Missing supplementary tables: {missing_supp_tab if missing_supp_tab else 'none'}",
         "",
+        "## Screening Mode",
+        f"- screening_mode: {getattr(args, 'screen_mode', 'unknown')}",
+        "",
         "## Seeds, Splits, Ablations Included",
         f"- splits: {seeds_splits['splits'] if seeds_splits['splits'] else ['unknown']}",
         f"- seeds: {seeds_splits['seeds'] if seeds_splits['seeds'] else ['unknown']}",
@@ -306,12 +311,26 @@ def main() -> None:
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
 
+    resolved_screen_dir: Path | None = None
+    screen_mode = "none"
+    if args.screen_dir:
+        resolved = resolve_step12_screen_outputs(Path(args.screen_dir), explicit_screen_dir=args.screen_dir)
+        resolved_screen_dir = resolved["screen_dir"]
+        screen_mode = resolved.get("workflow", "explicit")
+    else:
+        step12_guess = outdir.parent / "step12"
+        if step12_guess.exists():
+            resolved = resolve_step12_screen_outputs(step12_guess)
+            resolved_screen_dir = resolved["screen_dir"]
+            screen_mode = resolved.get("workflow", "auto")
+    setattr(args, "screen_mode", screen_mode)
+
     source_dirs: dict[str, Path | None] = {
         "run_dir": Path(args.run_dir),
         "interpret_dir": Path(args.interpret_dir),
         "robust_dir": Path(args.robust_dir) if args.robust_dir else None,
         "cross_endpoint_dir": Path(args.cross_endpoint_dir) if args.cross_endpoint_dir else None,
-        "screen_dir": Path(args.screen_dir) if args.screen_dir else None,
+        "screen_dir": resolved_screen_dir,
         "screen_analysis_dir": Path(args.screen_analysis_dir) if args.screen_analysis_dir else None,
         "screen_match_dir": Path(args.screen_match_dir) if args.screen_match_dir else None,
     }
@@ -420,7 +439,7 @@ def main() -> None:
 
     dataset_candidate = Path(f"data/processed/environments/{args.target}/data/multienv_compound_level.parquet")
     dataset_hash = sha256_file(dataset_candidate)
-    screen_fp = source_dirs["screen_dir"] / "input" / "input_fingerprint.json" if args.screen_dir and source_dirs["screen_dir"] is not None else Path("/__missing__")
+    screen_fp = source_dirs["screen_dir"] / "input" / "input_fingerprint.json" if source_dirs["screen_dir"] is not None else Path("/__missing__")
     screen_fp_hash = sha256_file(screen_fp)
 
     prov_manifest = {

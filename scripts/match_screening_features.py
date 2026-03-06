@@ -14,6 +14,7 @@ import pandas as pd
 from chemotype_cluster import cluster_chemotypes
 from fragment_analysis import build_feature_presence, enrichment_hits_vs_background
 from plot_style import add_plot_style_args, set_manuscript_style, style_axis, style_from_args
+from screening_compat import load_screening_tables, resolve_step12_screen_outputs
 from rgroup_transfer import decompose_with_core, transfer_rgroups
 from scaffold_map import map_hits_to_training_scaffolds
 from shape_analysis import run_shape_analysis
@@ -87,10 +88,13 @@ def main() -> None:
     screen_dir = Path(args.screen_dir)
     interpret_dir = Path(args.interpret_dir)
 
-    ranked_pref = screen_dir / "ranking" / "ranked_cns_like_in_domain.parquet"
-    ranked_fallback = screen_dir / "ranking" / "ranked_all.parquet"
-    ranked_path = ranked_pref if ranked_pref.exists() else ranked_fallback
-    ranked = pd.read_parquet(ranked_path)
+    resolved = resolve_step12_screen_outputs(screen_dir)
+    screen_dir = resolved["screen_dir"]
+    _, ranked_all, ranked_cns_in = load_screening_tables(screen_dir)
+    ranked = ranked_cns_in if len(ranked_cns_in) else ranked_all
+    ranked_path = screen_dir / "ranking" / "ranked_cns_like_in_domain.parquet"
+    if not ranked_path.exists():
+        ranked_path = screen_dir / "ranking" / "ranked_all.parquet"
     id_col = _pick(ranked, "molecule_id", "compound_id", "id", default="molecule_id")
     smiles_col = _pick(ranked, "smiles", "SMILES", default="smiles")
     if id_col not in ranked.columns:

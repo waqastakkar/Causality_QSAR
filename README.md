@@ -261,9 +261,9 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 | 11 | `step11_robustness.sh` | `run_dir` or `runs_root` + step3 parquet | `outputs/step11/*` |
 | 12a | `step12a_prepare_library.sh` | config + `screening.input_path` CSV | `outputs/step12/prepared/*` + `outputs/step12/latest_prepare.json` |
 | 12b | `step12b_screen_library.sh` | step12a deduplicated parquet + explicit `run_dir` (single model) or auto-discovered Step06 split runs (multi-seed ensemble) | `outputs/step12/screening/*` (seed-level + aggregated predictions) + `outputs/step12/latest_screen.json` |
-| 13 | `step13_analyze_screening.sh` | config + step12 outputs | `outputs/step13/*` |
-| 14 | `step14_match_features.sh` | config + step13 outputs | `outputs/step14/*` |
-| 15 | `step15_manuscript.sh` | config + previous outputs | `outputs/step15/*` |
+| 13 | `step13_analyze_screening.sh` | config + Step12 screening outputs resolved in this order: `outputs/step12/latest_screen.json`, `outputs/step12/run_pointer.json`, then old Step12 layout | `outputs/step13/*` |
+| 14 | `step14_match_features.sh` | config + Step12/Step13 outputs (same Step12 resolution order as Step13) | `outputs/step14/*` |
+| 15 | `step15_manuscript.sh` | config + previous outputs; Step12 screen source supports both new and old layouts (new preferred) | `outputs/step15/*` |
 
 ### CLI status (deprecated)
 

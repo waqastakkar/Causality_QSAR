@@ -11,5 +11,8 @@ PY
 )"
 STEP_OUT="$OUTPUTS_ROOT/step14"; LOG_FILE="$STEP_OUT/step14_match_features.log"; mkdir -p "$STEP_OUT"
 manual_require_dir "$OUTPUTS_ROOT/step12" "run step12 first"
-CMD=("$PYTHON_BIN" "scripts/match_screening_features.py" "--config" "$CONFIG" "${STYLE_FLAGS[@]}")
+EXPLICIT_SCREEN_DIR="$(manual_get_override screen_dir "${EXTRA_ARGS[@]}")"
+SCREEN_DIR="$(manual_resolve_step12_screen_dir "$PYTHON_BIN" "$OUTPUTS_ROOT/step12" "$EXPLICIT_SCREEN_DIR")"
+manual_require_dir "$SCREEN_DIR" "resolved screening run directory"
+CMD=("$PYTHON_BIN" "scripts/match_screening_features.py" "--config" "$CONFIG" "--screen_dir" "$SCREEN_DIR" "${STYLE_FLAGS[@]}")
 manual_append_overrides EXTRA_ARGS CMD; manual_run_with_log "$LOG_FILE" "${CMD[@]}"

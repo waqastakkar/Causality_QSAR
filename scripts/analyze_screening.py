@@ -15,6 +15,7 @@ from diversity import run_diversity_selection
 from liability_flags import add_property_liability_flags
 from novelty import compute_novelty
 from plot_style import add_plot_style_args, configure_matplotlib, style_axis, style_from_args
+from screening_compat import load_screening_tables, resolve_step12_screen_outputs
 
 
 def _bool(x: str | bool) -> bool:
@@ -90,13 +91,11 @@ def main() -> None:
     outdir = Path(args.outdir)
     dirs = _mkdirs(outdir)
 
-    score_path = screen_dir / "predictions" / "scored_with_uncertainty.parquet"
-    rank_all_path = screen_dir / "ranking" / "ranked_all.parquet"
-    rank_cns_in_path = screen_dir / "ranking" / "ranked_cns_like_in_domain.parquet"
-
-    scored = pd.read_parquet(score_path)
-    ranked_all = pd.read_parquet(rank_all_path) if rank_all_path.exists() else scored.sort_values("score_mean", ascending=False)
-    ranked_cns_in = pd.read_parquet(rank_cns_in_path) if rank_cns_in_path.exists() else ranked_all.copy()
+    resolved = resolve_step12_screen_outputs(screen_dir)
+    screen_dir = resolved["screen_dir"]
+    scored, ranked_all, ranked_cns_in = load_screening_tables(screen_dir)
+    ranked_all = ranked_all.sort_values("canonical_score", ascending=False)
+    ranked_cns_in = ranked_cns_in.sort_values("canonical_score", ascending=False)
     train = pd.read_parquet(args.train_parquet)
 
     smiles_col = _pick_col(scored, "smiles", "SMILES") or "smiles"
