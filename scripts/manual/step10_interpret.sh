@@ -45,10 +45,16 @@ for RUN_DIR in "${RUN_DIRS[@]}"; do
   SPLIT_NAME="$(basename "$(dirname "$RUN_DIR")")"
   RUN_ID="$(basename "$RUN_DIR")"
   OUTDIR="$STEP_OUT/$SPLIT_NAME/$RUN_ID"
+  echo "[step10] Starting interpret run split=$SPLIT_NAME run_id=$RUN_ID run_dir=$RUN_DIR" | tee -a "$LOG_FILE"
   CMD=("$PYTHON_BIN" "scripts/interpret_model.py" "--target" "$TARGET" "--run_dir" "$RUN_DIR" "--dataset_parquet" "$DATASET_PARQUET" "--outdir" "$OUTDIR")
   BBB_PARQUET="$OUTPUTS_ROOT/step3/data/bbb_annotations.parquet"; [[ -f "$BBB_PARQUET" ]] || BBB_PARQUET="$OUTPUTS_ROOT/step3/bbb_annotations.parquet"
   if [[ -f "$BBB_PARQUET" ]]; then CMD+=("--bbb_parquet" "$BBB_PARQUET"); fi
   if [[ -f "$OUTPUTS_ROOT/step7/candidates/ranked_topk.parquet" ]]; then CMD+=("--counterfactuals_parquet" "$OUTPUTS_ROOT/step7/candidates/ranked_topk.parquet"); fi
+
+  # Safe defaults for memory-constrained interpretation runs.
+  # Can be overridden via EXTRA_ARGS, e.g. --max_compounds 2000 --skip_shape
+  CMD+=("--max_compounds" "5000")
+
   CMD+=("${STYLE_FLAGS[@]}")
   manual_append_overrides EXTRA_ARGS CMD
   manual_run_with_log "$LOG_FILE" "${CMD[@]}"
