@@ -255,7 +255,6 @@ def main():
         single_out.to_parquet(out / "predictions/scored_single_model.parquet", index=False)
 
     scored = feat_df.merge(ens_all[["compound_id", "prediction_mean", "prediction_std", "n_models", "score_mean", "score_std", *pred_cols]], on="compound_id", how="inner")
-    scored["ad_distance"] = np.nan
     ad_invalid_smiles_rows = 0
     if _bool(args.compute_ad) and "fingerprint" in args.ad_mode:
         if "canonical_smiles" not in scored.columns:
@@ -267,6 +266,8 @@ def main():
         idx = build_or_load_train_fingerprint_index(run_dir)
         ad = fingerprint_ad(idx, ad_input)
         scored = scored.merge(ad.rename(columns={"molecule_id": "compound_id", "ad_distance_fingerprint": "ad_distance"}), on="compound_id", how="left")
+    if "ad_distance" not in scored.columns:
+        scored["ad_distance"] = np.nan
     scored.to_parquet(out / "predictions/scored_with_uncertainty.parquet", index=False)
 
     ranks, sel = build_rankings(scored, args.cns_mpo_threshold, args.ad_threshold, args.topk)
