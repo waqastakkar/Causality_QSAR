@@ -72,6 +72,24 @@ run_for_interpret() {
   manual_run_with_log "$LOG_FILE" "${cmd[@]}"
 }
 
+resolve_interpret_dir_for_split() {
+  local split_name="$1"
+  local run_id="$2"
+
+  local ptr="$OUTPUTS_ROOT/step10/$split_name/latest_run.json"
+  if [[ -f "$ptr" ]]; then
+    local resolved
+    resolved="$(manual_read_run_pointer "$PYTHON_BIN" "$ptr")"
+    if [[ -n "$resolved" ]]; then
+      echo "$resolved"
+      return 0
+    fi
+  fi
+
+  local candidate="$OUTPUTS_ROOT/step10/$split_name/$run_id"
+  echo "$candidate"
+}
+
 if [[ -n "$INTERPRET_OVERRIDE" ]]; then
   split_name="$(basename "$(dirname "$INTERPRET_OVERRIDE")")"
   run_id="$(basename "$INTERPRET_OVERRIDE")"
@@ -90,7 +108,7 @@ for SPLIT_NAME in "${SPLITS[@]}"; do
   RUN_DIR="$(manual_read_run_pointer "$PYTHON_BIN" "$PTR")"
   [[ -n "$RUN_DIR" ]] || continue
   RUN_ID="$(basename "$RUN_DIR")"
-  INTERPRET_DIR="$OUTPUTS_ROOT/step10/$SPLIT_NAME/$RUN_ID"
+  INTERPRET_DIR="$(resolve_interpret_dir_for_split "$SPLIT_NAME" "$RUN_ID")"
   run_for_interpret "$INTERPRET_DIR" "$SPLIT_NAME" "$RUN_ID"
   resolved_any=1
 done
@@ -103,6 +121,6 @@ if [[ "$resolved_any" -eq 0 ]]; then
   [[ -n "$RUN_DIR" ]] || manual_fail_preflight "run pointer did not contain run_dir: $PTR"
   SPLIT_NAME="$(basename "$(dirname "$RUN_DIR")")"
   RUN_ID="$(basename "$RUN_DIR")"
-  INTERPRET_DIR="$OUTPUTS_ROOT/step10/$SPLIT_NAME/$RUN_ID"
+  INTERPRET_DIR="$(resolve_interpret_dir_for_split "$SPLIT_NAME" "$RUN_ID")"
   run_for_interpret "$INTERPRET_DIR" "$SPLIT_NAME" "$RUN_ID"
 fi
