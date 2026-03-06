@@ -33,9 +33,15 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "title": "Causal validation",
                 "category": "main",
                 "dest_name": "Fig3_causal_validation.svg",
-                "step_origin": "Step8-10",
-                "source_key": "interpret_dir",
-                "candidates": ["figures/fig_zinv_env_predictability.svg", "figures/fig_zinv_stability.svg"],
+                "step_origin": "Step9-10",
+                "source_key": "cross_endpoint_dir",
+                "candidates": [
+                    "figures/fig_calibration_external.svg",
+                    "figures/fig_roc_external.svg",
+                    "figures/fig_pr_external.svg",
+                    "figures/fig_zinv_env_predictability.svg",
+                    "figures/fig_zinv_stability.svg",
+                ],
             },
             {
                 "id": "Fig4",
@@ -44,7 +50,11 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "Fig4_counterfactual_sar.svg",
                 "step_origin": "Step7",
                 "source_key": "interpret_dir",
-                "candidates": ["figures/fig_counterfactual_top_edits.svg", "figures/fig_cns_tradeoff.svg"],
+                "candidates": [
+                    "figures/fig_counterfactual_top_edits.svg",
+                    "figures/fig_cns_tradeoff.svg",
+                    "figures/fig_rgroup_sar_top_series.svg",
+                ],
             },
             {
                 "id": "Fig5",
@@ -80,7 +90,11 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "FigS3_interpretability.svg",
                 "step_origin": "Step10",
                 "source_key": "interpret_dir",
-                "candidates": ["figures/fig_rgroup_series_effects.svg", "figures/fig_fragment_enrichment.svg"],
+                "candidates": [
+                    "figures/fig_rgroup_series_effects.svg",
+                    "figures/fig_rgroup_effect_sizes.svg",
+                    "figures/fig_fragment_enrichment.svg",
+                ],
             },
             {
                 "id": "FigS4",
@@ -98,7 +112,12 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "FigS5_feature_match.svg",
                 "step_origin": "Step14",
                 "source_key": "screen_match_dir",
-                "candidates": ["figures/fig_fragment_enrichment_hits_vs_library.svg", "figures/fig_shape_triangle_overlay.svg"],
+                "candidates": [
+                    "figures/fig_fragment_enrichment_hits_vs_library.svg",
+                    "figures/fig_fragment_enrichment_hits.svg",
+                    "figures/fig_shape_triangle_overlay.svg",
+                    "figures/fig_shape_triangle_train_vs_hits.svg",
+                ],
             },
         ],
         "tables": [
@@ -118,7 +137,7 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "Table2_generalization_metrics.csv",
                 "step_origin": "Step8",
                 "source_key": "run_dir",
-                "candidates": ["reports/test_metrics_summary.csv", "reports/generalization_metrics.csv"],
+                "candidates": ["reports/test_metrics_summary.csv", "reports/metrics_summary.csv", "reports/generalization_metrics.csv"],
             },
             {
                 "id": "Table3",
@@ -127,7 +146,7 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "Table3_cross_endpoint_metrics.csv",
                 "step_origin": "Step9",
                 "source_key": "cross_endpoint_dir",
-                "candidates": ["reports/cross_endpoint_summary.csv", "reports/main_metrics.csv"],
+                "candidates": ["reports/cross_endpoint_metrics.csv", "reports/cross_endpoint_summary.csv", "reports/main_metrics.csv"],
             },
             {
                 "id": "Table4",
@@ -154,7 +173,7 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "TableS1_ablation_metrics.csv",
                 "step_origin": "Step8",
                 "source_key": "run_dir",
-                "candidates": ["reports/ablation_metrics.csv", "reports/ablation_summary.csv"],
+                "candidates": ["reports/ablation_metrics.csv", "reports/ablation_summary.csv", "reports/ablation_grid.csv"],
             },
             {
                 "id": "TableS2",
@@ -163,7 +182,11 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "TableS2_seed_stability.csv",
                 "step_origin": "Step11",
                 "source_key": "robust_dir",
-                "candidates": ["reports/seed_stability_summary.csv", "reports/seed_metrics.csv"],
+                "candidates": [
+                    "reports/seed_stability_summary.csv",
+                    "reports/seed_metrics.csv",
+                    "stability/seed_stability_metrics.csv",
+                ],
             },
             {
                 "id": "TableS3",
@@ -172,7 +195,12 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "TableS3_conformal_coverage.csv",
                 "step_origin": "Step11",
                 "source_key": "robust_dir",
-                "candidates": ["reports/conformal_summary.csv", "reports/conformal_coverage_width.csv"],
+                "candidates": [
+                    "reports/conformal_summary.csv",
+                    "reports/conformal_coverage_width.csv",
+                    "conformal/conformal_coverage.csv",
+                    "conformal/interval_width_by_split.csv",
+                ],
             },
             {
                 "id": "TableS4",
@@ -181,7 +209,11 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "TableS4_ad_bins.csv",
                 "step_origin": "Step11",
                 "source_key": "robust_dir",
-                "candidates": ["reports/ad_bin_metrics.csv", "reports/ad_metrics.csv"],
+                "candidates": [
+                    "reports/ad_bin_metrics.csv",
+                    "reports/ad_metrics.csv",
+                    "applicability_domain/error_vs_ad.csv",
+                ],
             },
             {
                 "id": "TableS5",
@@ -190,7 +222,7 @@ def default_mapping() -> dict[str, list[dict[str, Any]]]:
                 "dest_name": "TableS5_rgroup_effects.csv",
                 "step_origin": "Step10",
                 "source_key": "interpret_dir",
-                "candidates": ["rgroup/rgroup_effects_full.csv", "reports/rgroup_effects.csv"],
+                "candidates": ["rgroup/rgroup_effects_full.csv", "rgroup/rgroup_effects.csv", "reports/rgroup_effects.csv"],
             },
             {
                 "id": "TableS6",
