@@ -2,16 +2,23 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import json
 import os
 import platform
+import resource
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
+
+try:
+    import pyarrow.parquet as pq
+except Exception:  # pragma: no cover
+    pq = None
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
@@ -38,10 +45,42 @@ def _load_predictions(run_dir: Path) -> pd.DataFrame:
     for split in ["train", "val", "test"]:
         fp = pred_dir / f"{split}_predictions.parquet"
         if fp.exists():
-            d = pd.read_parquet(fp)
+            cols = _available_columns(fp, ["molecule_id", "compound_id", "mol_id", "yhat", "prediction", "pred", "y_pred", "pIC50_hat", "prediction_mean", "y", "split"])
+            d = pd.read_parquet(fp, columns=cols if cols else None)
             d["split"] = split
             rows.append(d)
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def _rss_mb() -> float:
+    # Linux ru_maxrss is KiB, macOS is bytes.
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return rss / (1024.0 * 1024.0)
+    return rss / 1024.0
+
+
+def _log_stage(msg: str) -> None:
+    print(f"[step10] {msg} | rss_max_mb={_rss_mb():.1f}", flush=True)
+
+
+def _available_columns(path: Path, wanted: list[str]) -> list[str]:
+    if pq is None:
+        return []
+    try:
+        names = set(pq.ParquetFile(path).schema.names)
+    except Exception:
+        return []
+    return [c for c in wanted if c in names]
+
+
+def _parquet_rows(path: Path) -> int | None:
+    if pq is None:
+        return None
+    try:
+        return int(pq.ParquetFile(path).metadata.num_rows)
+    except Exception:
+        return None
 
 
 def _pick_col(df: pd.DataFrame, candidates: list[str], required: bool = True) -> str | None:
@@ -177,6 +216,11 @@ def main() -> None:
     parser.add_argument("--shape_select", default="lowest_uff_energy")
     parser.add_argument("--attribution_method", default="integrated_gradients")
     parser.add_argument("--attribution_target", default="z_inv")
+    parser.add_argument("--max_counterfactuals", type=int, default=None)
+    parser.add_argument("--max_compounds", type=int, default=None)
+    parser.add_argument("--skip_attribution", action="store_true")
+    parser.add_argument("--skip_shape", action="store_true")
+    parser.add_argument("--skip_fragments", action="store_true")
     add_plot_style_args(parser)
     args = parser.parse_args()
 
@@ -190,7 +234,27 @@ def main() -> None:
     (outdir / "figure_data").mkdir(parents=True, exist_ok=True)
     (outdir / "provenance").mkdir(parents=True, exist_ok=True)
 
-    df = pd.read_parquet(args.dataset_parquet)
+    _log_stage(f"Loading dataset parquet: {args.dataset_parquet}")
+    dataset_cols = _available_columns(
+        Path(args.dataset_parquet),
+        [
+            "smiles",
+            "canonical_smiles",
+            "molecule_id",
+            "molecule_chembl_id",
+            "compound_id",
+            "mol_id",
+            "id",
+            "series_id",
+            "env_id_manual",
+            "assay_type",
+            "split",
+            "pIC50",
+            "yhat",
+            "cns_like",
+        ],
+    )
+    df = pd.read_parquet(args.dataset_parquet, columns=dataset_cols if dataset_cols else None)
     smiles_col = _pick_col(df, ["smiles", "canonical_smiles"])
     mol_col = _pick_col(
         df,
@@ -213,6 +277,11 @@ def main() -> None:
     elif mol_col != "molecule_id":
         df = df.rename(columns={mol_col: "molecule_id"})
 
+    if args.max_compounds is not None and args.max_compounds > 0 and len(df) > args.max_compounds:
+        _log_stage(f"Applying --max_compounds={args.max_compounds} to dataset rows={len(df)}")
+        df = df.head(args.max_compounds).copy()
+
+    _log_stage("Loading predictions")
     preds = _load_predictions(run_dir)
     if not preds.empty:
         pmol = _pick_col(preds, ["molecule_id", "compound_id", "mol_id"])
@@ -223,8 +292,15 @@ def main() -> None:
             preds = preds.rename(columns={"y": "pIC50"})
             cols.append("pIC50")
         df = df.merge(preds[cols].drop_duplicates(subset=["molecule_id", "split"]), on="molecule_id", how="left")
+    del preds
+    gc.collect()
 
-    bbb = pd.read_parquet(args.bbb_parquet) if args.bbb_parquet and Path(args.bbb_parquet).exists() else None
+    _log_stage("Loading BBB annotations")
+    bbb = None
+    if args.bbb_parquet and Path(args.bbb_parquet).exists():
+        bbb_path = Path(args.bbb_parquet)
+        bbb_cols = _available_columns(bbb_path, ["molecule_id", "compound_id", "mol_id", "cns_like", "is_cns", "bbb_class"])
+        bbb = pd.read_parquet(args.bbb_parquet, columns=bbb_cols if bbb_cols else None)
     if bbb is not None:
         bmol = _pick_col(bbb, ["molecule_id", "compound_id", "mol_id"])
         if bmol != "molecule_id":
@@ -237,11 +313,34 @@ def main() -> None:
                 bbb = bbb.rename(columns={cns_col: "cns_like"})
         df = df.merge(bbb[[c for c in ["molecule_id", "cns_like"] if c in bbb.columns]].drop_duplicates("molecule_id"), on="molecule_id", how="left")
 
-    counterfactuals = pd.read_parquet(args.counterfactuals_parquet) if args.counterfactuals_parquet and Path(args.counterfactuals_parquet).exists() else None
+    counterfactuals = None
+    if args.counterfactuals_parquet and Path(args.counterfactuals_parquet).exists():
+        _log_stage(f"Loading counterfactuals parquet: {args.counterfactuals_parquet}")
+        counter_path = Path(args.counterfactuals_parquet)
+        counter_rows = _parquet_rows(counter_path)
+        safe_limit = None
+        if args.max_counterfactuals is not None and args.max_counterfactuals > 0:
+            safe_limit = args.max_counterfactuals
+        elif counter_rows is not None:
+            if counter_rows > 200_000:
+                safe_limit = 500
+            elif counter_rows > 50_000:
+                safe_limit = 1000
+        if safe_limit is not None:
+            _log_stage(f"Counterfactual safe-mode active: limiting to top {safe_limit} rows (estimated rows={counter_rows})")
+        c_cols = _available_columns(counter_path, ["molecule_id", "compound_id", "mol_id", "smiles", "canonical_smiles", "score", "rank", "yhat", "delta", "is_hit"])
+        counterfactuals = pd.read_parquet(counter_path, columns=c_cols if c_cols else None)
+        if safe_limit is not None and len(counterfactuals) > safe_limit:
+            rank_col = _pick_col(counterfactuals, ["rank"], required=False)
+            if rank_col is not None:
+                counterfactuals = counterfactuals.sort_values(rank_col, ascending=True).head(safe_limit).copy()
+            else:
+                counterfactuals = counterfactuals.head(safe_limit).copy()
 
     style = style_from_args(args)
     configure_matplotlib(style, svg=True)
 
+    _log_stage("Running R-group analysis")
     rgo = run_rgroup_analysis(df, series_min_n=args.rgroup_series_min_n)
     rgo.series_scaffolds.to_csv(outdir / "rgroup" / "series_scaffolds.csv", index=False)
     rgo.rgroup_table.to_parquet(outdir / "rgroup" / "rgroup_table.parquet", index=False)
@@ -249,27 +348,51 @@ def main() -> None:
     rgo.env_interactions.to_csv(outdir / "rgroup" / "rgroup_env_interactions.csv", index=False)
     rgo.quality.to_csv(outdir / "rgroup" / "rgroup_quality_report.csv", index=False)
 
-    fro = run_fragment_analysis(df, counterfactuals=counterfactuals, bbb=bbb, method=args.fragment_method, correction=args.mtc_method)
+    if args.skip_fragments:
+        _log_stage("Skipping fragment analysis (--skip_fragments)")
+        fro = run_fragment_analysis(pd.DataFrame(columns=["molecule_id", "smiles"]), method=args.fragment_method)
+    else:
+        _log_stage("Running fragment analysis")
+        fro = run_fragment_analysis(df, method=args.fragment_method)
     fro.fragment_library.to_parquet(outdir / "fragments" / "fragment_library.parquet", index=False)
     fro.fragment_enrichment.to_csv(outdir / "fragments" / "fragment_enrichment.csv", index=False)
     fro.functional_group_enrichment.to_csv(outdir / "fragments" / "functional_group_enrichment.csv", index=False)
     fro.quality_report.to_csv(outdir / "fragments" / "enrichment_quality_report.csv", index=False)
+    del counterfactuals
+    del bbb
+    gc.collect()
 
-    sho = run_shape_analysis(df, n_confs=args.shape_etkdg_confs, seed=args.shape_seed, select=args.shape_select)
+    if args.skip_shape:
+        _log_stage("Skipping shape analysis (--skip_shape)")
+        sho = run_shape_analysis(pd.DataFrame(columns=["molecule_id", "smiles"]), n_confs=args.shape_etkdg_confs, seed=args.shape_seed, select=args.shape_select)
+    else:
+        _log_stage("Running shape analysis")
+        sho = run_shape_analysis(df, n_confs=args.shape_etkdg_confs, seed=args.shape_seed, select=args.shape_select)
     sho.descriptors.to_parquet(outdir / "shape" / "shape_descriptors.parquet", index=False)
     sho.failures.to_csv(outdir / "shape" / "shape_failures.csv", index=False)
     sho.vs_potency.to_csv(outdir / "shape" / "shape_vs_potency.csv", index=False)
     sho.vs_residuals.to_csv(outdir / "shape" / "shape_vs_residuals.csv", index=False)
+    gc.collect()
 
-    ato = run_attribution_analysis(df, method=args.attribution_method, target=args.attribution_target, fragment_library=fro.fragment_library, rgroup_table=rgo.rgroup_table)
+    if args.skip_attribution:
+        _log_stage("Skipping attribution analysis (--skip_attribution)")
+        ato = run_attribution_analysis(pd.DataFrame(columns=["molecule_id", "smiles"]))
+    else:
+        _log_stage("Running attribution analysis")
+        ato = run_attribution_analysis(df, method=args.attribution_method, target=args.attribution_target, fragment_library=fro.fragment_library, rgroup_table=rgo.rgroup_table)
     ato.atom_attributions.to_parquet(outdir / "attribution" / "atom_attributions.parquet", index=False)
     ato.fragment_attributions.to_csv(outdir / "attribution" / "fragment_attributions.csv", index=False)
     ato.rgroup_attributions.to_csv(outdir / "attribution" / "rgroup_attributions.csv", index=False)
     ato.stability.to_csv(outdir / "attribution" / "attribution_stability_across_env.csv", index=False)
 
+    _log_stage("Generating plots")
+
     _plot_all(outdir, style, rgo.effects, rgo.rgroup_table, fro.fragment_enrichment, fro.functional_group_enrichment, sho.descriptors, sho.vs_potency, sho.vs_residuals, ato.atom_attributions, ato.stability)
 
+    gc.collect()
+
     # provenance
+    _log_stage("Writing provenance")
     prov_dir = outdir / "provenance"
     run_cfg = vars(args)
     (prov_dir / "run_config.json").write_text(json.dumps(run_cfg, indent=2))
