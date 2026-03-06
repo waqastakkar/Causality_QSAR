@@ -44,11 +44,12 @@ def _mkdirs(root: Path):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Step 12: library screening")
+    p = argparse.ArgumentParser(description="Step 12b: screen prepared library")
     p.add_argument("--target", required=True)
     p.add_argument("--run_dir", required=True)
-    p.add_argument("--input_path", required=True)
-    p.add_argument("--input_format", choices=["smi", "csv"], required=True)
+    p.add_argument("--prepared_library_path", default=None)
+    p.add_argument("--input_path", default=None)
+    p.add_argument("--input_format", choices=["smi", "csv"], default="csv")
     p.add_argument("--outdir", required=True)
     p.add_argument("--screen_id", default=None)
     p.add_argument("--smi_layout", choices=["smiles_id", "smiles_name_id", "smiles_only"], default="smiles_id")
@@ -73,15 +74,16 @@ def parse_args():
     return p.parse_args()
 
 
-def main():
-    args = parse_args()
-    run_dir = Path(args.run_dir)
-    screen_id = args.screen_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = Path(args.outdir) if Path(args.outdir).name == screen_id else Path(args.outdir) / args.target / screen_id
-    _mkdirs(out)
+def _load_deduplicated_library(args: argparse.Namespace, out: Path) -> tuple[pd.DataFrame, dict[str, int]]:
+    if args.prepared_library_path:
+        p = Path(args.prepared_library_path)
+        if not p.exists():
+            raise SystemExit(f"missing required prepared library file: {p}")
+        dedup = pd.read_parquet(p)
+        return dedup, {"clean_dedup_rows": int(len(dedup)), "prepared_input_mode": 1}
 
-    style = style_from_args(args)
-    configure_matplotlib(style, svg=True)
+    if not args.input_path:
+        raise SystemExit("either --prepared_library_path or --input_path must be provided")
 
     parsed, manifest = parse_library(
         input_path=args.input_path,
@@ -105,6 +107,20 @@ def main():
     clean, dedup, clean_report = clean_library(parsed)
     clean.to_parquet(out / "processed/library_clean.parquet", index=False)
     dedup.to_parquet(out / "processed/library_dedup.parquet", index=False)
+    return dedup, clean_report
+
+
+def main():
+    args = parse_args()
+    run_dir = Path(args.run_dir)
+    screen_id = args.screen_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    out = Path(args.outdir) if Path(args.outdir).name == screen_id else Path(args.outdir) / args.target / screen_id
+    _mkdirs(out)
+
+    style = style_from_args(args)
+    configure_matplotlib(style, svg=True)
+
+    dedup, clean_report = _load_deduplicated_library(args, out)
 
     with_props = compute_properties(dedup, smiles_col="canonical_smiles")
     if _bool(args.compute_bbb):
@@ -122,7 +138,6 @@ def main():
         idx = build_or_load_train_fingerprint_index(run_dir)
         ad = fingerprint_ad(idx, scored.rename(columns={"canonical_smiles": "smiles", "compound_id": "molecule_id"}))
         scored = scored.merge(ad.rename(columns={"molecule_id": "compound_id", "ad_distance_fingerprint": "ad_distance"}), on="compound_id", how="left")
-    cols = ["compound_id", "compound_name", "canonical_smiles", "inchikey", "score_mean", "score_std", "ad_distance"]
     scored.to_parquet(out / "predictions/scored_with_uncertainty.parquet", index=False)
 
     ranks, sel = build_rankings(scored, args.cns_mpo_threshold, args.ad_threshold, args.topk)
@@ -132,17 +147,9 @@ def main():
     ranks["best"].head(500).to_csv(out / "ranking/top_500.csv", index=False)
     sel.to_csv(out / "ranking/selection_report.csv", index=False)
 
-    report = {
-        "parsed_total": int(len(parsed)),
-        "parsed_ok": int((parsed["parse_status"] == "ok").sum()) if "parse_status" in parsed else 0,
-        "parsed_fail": int((parsed["parse_status"] != "ok").sum()) if "parse_status" in parsed else 0,
-        **clean_report,
-        **feat_report,
-        "final_scored_count": int(len(scored)),
-    }
+    report = {**clean_report, **feat_report, "final_scored_count": int(len(scored))}
     pd.DataFrame([{"metric": k, "value": v} for k, v in report.items()]).to_csv(out / "processed/featurization_report.csv", index=False)
 
-    # figures + figure_data
     s = scored[["score_mean"]].dropna(); s.to_csv(out / "figure_data/score_distribution.csv", index=False)
     fig, ax = plt.subplots(figsize=(6, 4)); ax.hist(s["score_mean"], bins=30); style_axis(ax, style, "Score distribution", "score_mean", "Count"); fig.tight_layout(); fig.savefig(out / "figures/fig_score_distribution.svg"); plt.close(fig)
 
@@ -175,12 +182,17 @@ def main():
 
     cfg = vars(args)
     (out / "provenance/run_config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    input_hash = None
+    if args.input_path:
+        input_hash = _sha256(Path(args.input_path))
+    elif args.prepared_library_path:
+        input_hash = _sha256(Path(args.prepared_library_path))
     prov = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
-        "input_hash": _sha256(Path(args.input_path)),
+        "input_hash": input_hash,
         "run_artifact_hashes": {str(p.relative_to(run_dir)): _sha256(p) for p in [run_dir / "artifacts/feature_schema.json", run_dir / "configs/resolved_config.yaml"] if p.exists()},
         "checkpoint_hashes": {str(p): _sha256(Path(p)) for p in ([str(run_dir / "checkpoints/best.pt")] if not args.use_ensemble_manifest else json.loads(Path(args.use_ensemble_manifest).read_text()).get("checkpoint_paths", [])) if Path(p).exists()},
         "script_hashes": {str(Path(__file__).name): _sha256(Path(__file__))},

@@ -39,9 +39,28 @@ def clean_library(parsed_df: pd.DataFrame, strip_salts: bool = True) -> tuple[pd
     if clean.empty:
         dedup = clean.copy()
     else:
-        agg = {c: "first" for c in clean.columns if c != "compound_id"}
-        agg["original_ids"] = ("compound_id", lambda s: sorted({str(x) for x in s if str(x)}))
-        dedup = clean.assign(compound_id=clean["compound_id"].astype(str)).groupby("inchikey", as_index=False).agg(**agg)
+        clean = clean.assign(compound_id=clean["compound_id"].astype(str))
+        dedup = (
+            clean.groupby("inchikey", as_index=False)
+            .agg(
+                source_row=("source_row", "first"),
+                compound_name=("compound_name", "first"),
+                smiles=("smiles", "first"),
+                raw_smiles=("raw_smiles", "first"),
+                raw_id=("raw_id", "first"),
+                raw_name=("raw_name", "first"),
+                parse_status=("parse_status", "first"),
+                parse_error=("parse_error", "first"),
+                canonical_smiles=("canonical_smiles", "first"),
+                original_ids=("compound_id", lambda s: sorted({str(x) for x in s if str(x)})),
+            )
+        )
+        if "raw_line" in clean.columns:
+            dedup = dedup.merge(clean[["inchikey", "raw_line"]].drop_duplicates("inchikey"), on="inchikey", how="left")
+        if "raw_row_json" in clean.columns:
+            dedup = dedup.merge(
+                clean[["inchikey", "raw_row_json"]].drop_duplicates("inchikey"), on="inchikey", how="left"
+            )
         dedup["compound_id"] = dedup["original_ids"].map(lambda x: x[0] if isinstance(x, list) and x else None)
 
     report = {

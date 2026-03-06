@@ -40,10 +40,13 @@ postprocess:
   threshold: 6.0
 
 screening:
-  input_format: smi
-  smi_layout: smiles_id
+  input_path: data/external/raw/library.csv
+  input_format: csv
+  sep: ","
   header: auto
   smiles_col_name: smiles
   id_col_name: zinc_id
+  name_col_name: name
+  smi_layout: smiles_id
   cns_mpo_threshold: 4.0
   topk: 500

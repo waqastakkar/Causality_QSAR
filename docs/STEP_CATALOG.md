@@ -18,10 +18,11 @@
 10. `step09_cross_endpoint.sh`
 11. `step10_interpret.sh`
 12. `step11_robustness.sh`
-13. `step12_screen_library.sh`
-14. `step13_analyze_screening.sh`
-15. `step14_match_features.sh`
-16. `step15_manuscript.sh`
+13. `step12a_prepare_library.sh`
+14. `step12b_screen_library.sh`
+15. `step13_analyze_screening.sh`
+16. `step14_match_features.sh`
+17. `step15_manuscript.sh`
 
 ## Split execution modes
 

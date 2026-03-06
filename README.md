@@ -236,7 +236,8 @@ bash scripts/manual/step08a_prepare_external_inhibition.sh configs/ptp1b.yaml
 bash scripts/manual/step09_cross_endpoint.sh configs/ptp1b.yaml
 bash scripts/manual/step10_interpret.sh configs/ptp1b.yaml
 bash scripts/manual/step11_robustness.sh configs/ptp1b.yaml
-bash scripts/manual/step12_screen_library.sh configs/ptp1b.yaml
+bash scripts/manual/step12a_prepare_library.sh configs/ptp1b.yaml
+bash scripts/manual/step12b_screen_library.sh configs/ptp1b.yaml
 bash scripts/manual/step13_analyze_screening.sh configs/ptp1b.yaml
 bash scripts/manual/step14_match_features.sh configs/ptp1b.yaml
 bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
@@ -258,7 +259,8 @@ bash scripts/manual/step15_manuscript.sh configs/ptp1b.yaml
 | 9 | `step09_cross_endpoint.sh` | explicit `run_dir` or split-aware latest pointer + canonical external parquet + Step06 `artifacts/feature_schema.json` | `outputs/step9/*` external active/inactive inhibition evaluation (ROC-AUC/PR-AUC from continuous `pIC50_hat`; fails early on schema mismatch) |
 | 10 | `step10_interpret.sh` | `run_dir` or `runs_root` (multi-run supported) + step3 parquet | `outputs/step10/<split>/<run_id>/*` |
 | 11 | `step11_robustness.sh` | `run_dir` or `runs_root` + step3 parquet | `outputs/step11/*` |
-| 12 | `step12_screen_library.sh` | config + screening inputs | `outputs/step12/*` |
+| 12a | `step12a_prepare_library.sh` | config + `screening.input_path` CSV | `outputs/step12/prepared/*` + `outputs/step12/latest_prepare.json` |
+| 12b | `step12b_screen_library.sh` | step12a deduplicated parquet + step6/step5 run pointer | `outputs/step12/screening/*` + `outputs/step12/latest_screen.json` |
 | 13 | `step13_analyze_screening.sh` | config + step12 outputs | `outputs/step13/*` |
 | 14 | `step14_match_features.sh` | config + step13 outputs | `outputs/step14/*` |
 | 15 | `step15_manuscript.sh` | config + previous outputs | `outputs/step15/*` |
