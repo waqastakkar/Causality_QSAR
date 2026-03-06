@@ -1,5 +1,12 @@
 # Pipeline changelog
 
+## 2026-03-06
+
+- Step12 was split into Step12a (`scripts/manual/step12a_prepare_library.sh`) and Step12b (`scripts/manual/step12b_screen_library.sh`).
+- Added `scripts/prepare_library.py` for explicit parse/clean/deduplicate preprocessing outputs.
+- Step12b now consumes prepared `library_dedup.parquet` and no longer auto-generates demo libraries.
+- Screening config now supports CSV-first input settings (`input_path`, `input_format: csv`, `sep`, column names).
+
 ## 2026-03-05
 
 - Manual pipeline now uses explicit run pointers (`outputs/step5/run_pointer.json`, `outputs/step6/run_pointer.json`) instead of implicit checkpoint discovery in downstream steps.
