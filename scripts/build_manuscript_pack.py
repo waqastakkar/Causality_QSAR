@@ -42,24 +42,117 @@ def str2bool(v: Any) -> bool:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Step 15 manuscript pack builder")
-    p.add_argument("--paper_id", required=True)
-    p.add_argument("--target", required=True)
-    p.add_argument("--run_dir", required=True)
-    p.add_argument("--interpret_dir", required=True)
+    p.add_argument("--config", required=False, default="")
+    p.add_argument("--paper_id", required=False, default="")
+    p.add_argument("--target", required=False, default="")
+    p.add_argument("--run_dir", required=False, default="")
+    p.add_argument("--interpret_dir", required=False, default="")
     p.add_argument("--robust_dir", required=False, default="")
     p.add_argument("--cross_endpoint_dir", required=False, default="")
     p.add_argument("--screen_dir", required=False, default="")
     p.add_argument("--screen_analysis_dir", required=False, default="")
     p.add_argument("--screen_match_dir", required=False, default="")
-    p.add_argument("--outdir", required=True)
+    p.add_argument("--outdir", required=False, default="")
     p.add_argument("--copy_only", type=str2bool, default=True)
-    p.add_argument("--svg_only", type=str2bool, default=True)
+    p.add_argument("--svg_only", type=str2bool, nargs="?", const=True, default=True)
+    p.add_argument("--svg", dest="svg_only", action="store_true")
     p.add_argument("--export_tables_csv", type=str2bool, default=True)
     p.add_argument("--export_tables_xlsx", type=str2bool, default=True)
     p.add_argument("--font", default="Times New Roman")
     p.add_argument("--bold_text", action="store_true")
     p.add_argument("--palette", default="nature5")
+    p.add_argument("--font_title", required=False, default="")
+    p.add_argument("--font_label", required=False, default="")
+    p.add_argument("--font_tick", required=False, default="")
+    p.add_argument("--font_legend", required=False, default="")
     return p.parse_args()
+
+
+def _read_pointer(path: Path) -> str:
+    if not path.exists():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise SystemExit(f"invalid run pointer JSON at {path}: {exc}")
+    run_dir = str(data.get("run_dir", "")).strip()
+    if not run_dir:
+        raise SystemExit(f"run pointer missing 'run_dir': {path}")
+    return run_dir
+
+
+def _resolve_required_path(args: argparse.Namespace) -> argparse.Namespace:
+    if not args.config:
+        missing = [k for k in ("paper_id", "target", "run_dir", "interpret_dir", "outdir") if not getattr(args, k)]
+        if missing:
+            raise SystemExit(
+                "missing required arguments: "
+                + ", ".join(f"--{x}" for x in missing)
+                + " (or pass --config)"
+            )
+        return args
+
+    cfg = safe_load_config(Path(args.config))
+    if not isinstance(cfg, dict):
+        raise SystemExit(f"invalid config content: {args.config}")
+
+    paths = cfg.get("paths", {}) if isinstance(cfg.get("paths"), dict) else {}
+    training = cfg.get("training", {}) if isinstance(cfg.get("training"), dict) else {}
+    outputs_root = Path(paths.get("outputs_root", "outputs")).resolve()
+    target = str(args.target or cfg.get("target") or "").strip()
+    if not target:
+        raise SystemExit("target not provided; set --target or config 'target'")
+
+    split = str(training.get("split_default", "scaffold_bm"))
+    if not args.run_dir:
+        step6_ptr = outputs_root / "step6" / target / split / "latest_run.json"
+        step5_ptr = outputs_root / "step5" / target / split / "latest_run.json"
+        root_step6_ptr = outputs_root / "step6" / target / "latest_run.json"
+        root_step5_ptr = outputs_root / "step5" / target / "latest_run.json"
+        for ptr in (step6_ptr, step5_ptr, root_step6_ptr, root_step5_ptr):
+            resolved = _read_pointer(ptr)
+            if resolved:
+                args.run_dir = resolved
+                break
+        if not args.run_dir:
+            raise SystemExit(
+                "no run_dir resolved for Step 15. Expected pointer file at one of: "
+                f"{step6_ptr}, {step5_ptr}, {root_step6_ptr}, {root_step5_ptr}; "
+                "or pass --run_dir explicitly"
+            )
+
+    run_path = Path(args.run_dir).resolve()
+    run_id = run_path.name
+    split_name = run_path.parent.name
+
+    if not args.interpret_dir:
+        ptr = outputs_root / "step10" / split_name / "latest_run.json"
+        resolved = _read_pointer(ptr)
+        if resolved:
+            args.interpret_dir = resolved
+        else:
+            args.interpret_dir = str(outputs_root / "step10" / split_name / run_id)
+
+    if not args.robust_dir:
+        args.robust_dir = str(outputs_root / "step11")
+
+    if not args.cross_endpoint_dir:
+        args.cross_endpoint_dir = str(outputs_root / "step8")
+
+    if not args.screen_analysis_dir:
+        args.screen_analysis_dir = str(outputs_root / "step13")
+
+    if not args.screen_match_dir:
+        args.screen_match_dir = str(outputs_root / "step14")
+
+    if not args.outdir:
+        args.outdir = str(outputs_root / "step15")
+
+    args.paper_id = str(args.paper_id or cfg.get("paper_id") or "").strip()
+    if not args.paper_id:
+        raise SystemExit("paper_id not provided; set --paper_id or config 'paper_id'")
+    args.target = target
+    return args
 
 
 def find_candidate(base_dir: Path, candidates: list[str]) -> Path | None:
@@ -296,7 +389,7 @@ def build_checklist(
 
 
 def main() -> None:
-    args = parse_args()
+    args = _resolve_required_path(parse_args())
     outdir = Path(args.outdir)
 
     dirs = {
