@@ -137,7 +137,7 @@ def _resolve_required_path(args: argparse.Namespace) -> argparse.Namespace:
         args.robust_dir = str(outputs_root / "step11")
 
     if not args.cross_endpoint_dir:
-        args.cross_endpoint_dir = str(outputs_root / "step8")
+        args.cross_endpoint_dir = str(outputs_root / "step9")
 
     if not args.screen_analysis_dir:
         args.screen_analysis_dir = str(outputs_root / "step13")
@@ -155,7 +155,7 @@ def _resolve_required_path(args: argparse.Namespace) -> argparse.Namespace:
     return args
 
 
-def find_candidate(base_dir: Path, candidates: list[str]) -> Path | None:
+def find_candidate(base_dir: Path, candidates: list[str]) -> tuple[Path | None, list[str]]:
     expanded: list[Path] = []
     for rel in candidates:
         candidate = base_dir / rel
@@ -163,7 +163,29 @@ def find_candidate(base_dir: Path, candidates: list[str]) -> Path | None:
             expanded.extend(sorted(base_dir.glob(rel)))
         else:
             expanded.append(candidate)
-    return find_first_existing(expanded)
+    checked = [str(p) for p in expanded]
+    return find_first_existing(expanded), checked
+
+
+def log_mapping_resolution(
+    *,
+    artifact_kind: str,
+    artifact_id: str,
+    source_key: str,
+    candidate_paths: list[str],
+    resolved_path: Path | None,
+) -> None:
+    print(f"[step15] map {artifact_kind}={artifact_id} source_key={source_key}")
+    if candidate_paths:
+        print("[step15]   candidates_checked=")
+        for p in candidate_paths:
+            print(f"[step15]     - {p}")
+    else:
+        print("[step15]   candidates_checked=<none>")
+    if resolved_path is None:
+        print("[step15]   resolved_path=<missing>")
+    else:
+        print(f"[step15]   resolved_path={resolved_path}")
 
 
 def gather_discovered_artifacts(source_dirs: dict[str, Path | None]) -> dict[str, list[str]]:
@@ -435,7 +457,14 @@ def main() -> None:
 
     for spec in mapping["figures"]:
         source_base = source_dirs.get(spec["source_key"], Path(""))
-        src = find_candidate(source_base, spec["candidates"]) if source_base is not None else None
+        src, checked = find_candidate(source_base, spec["candidates"]) if source_base is not None else (None, [])
+        log_mapping_resolution(
+            artifact_kind="figure",
+            artifact_id=spec["id"],
+            source_key=spec["source_key"],
+            candidate_paths=checked,
+            resolved_path=src,
+        )
         category_dir = dirs["main_figures"] if spec["category"] == "main" else dirs["supp_figures"]
         dst = category_dir / spec["dest_name"]
         status = "missing"
@@ -452,6 +481,7 @@ def main() -> None:
                 "fig_title": spec["title"],
                 "category": spec["category"],
                 "source_path": src_path,
+                "candidates_checked": " | ".join(checked),
                 "dest_path": str(dst) if status == "present" else "",
                 "step_origin": spec["step_origin"],
                 "status": status,
@@ -461,7 +491,14 @@ def main() -> None:
 
     for spec in mapping["tables"]:
         source_base = source_dirs.get(spec["source_key"], Path(""))
-        src = find_candidate(source_base, spec["candidates"]) if source_base is not None else None
+        src, checked = find_candidate(source_base, spec["candidates"]) if source_base is not None else (None, [])
+        log_mapping_resolution(
+            artifact_kind="table",
+            artifact_id=spec["id"],
+            source_key=spec["source_key"],
+            candidate_paths=checked,
+            resolved_path=src,
+        )
         category_dir = dirs["main_tables"] if spec["category"] == "main" else dirs["supp_tables"]
         dst = category_dir / spec["dest_name"]
         status = "missing"
@@ -478,6 +515,7 @@ def main() -> None:
                 "table_title": spec["title"],
                 "category": spec["category"],
                 "source_path": src_path,
+                "candidates_checked": " | ".join(checked),
                 "dest_path": str(dst) if status == "present" else "",
                 "step_origin": spec["step_origin"],
                 "status": status,
@@ -490,12 +528,32 @@ def main() -> None:
     write_csv(
         fig_manifest,
         figure_rows,
-        ["fig_id", "fig_title", "category", "source_path", "dest_path", "step_origin", "status", "sha256"],
+        [
+            "fig_id",
+            "fig_title",
+            "category",
+            "source_path",
+            "candidates_checked",
+            "dest_path",
+            "step_origin",
+            "status",
+            "sha256",
+        ],
     )
     write_csv(
         table_manifest,
         table_rows,
-        ["table_id", "table_title", "category", "source_path", "dest_path", "step_origin", "status", "sha256"],
+        [
+            "table_id",
+            "table_title",
+            "category",
+            "source_path",
+            "candidates_checked",
+            "dest_path",
+            "step_origin",
+            "status",
+            "sha256",
+        ],
     )
 
     citations = dirs["manifests"] / "citations_sources.txt"
