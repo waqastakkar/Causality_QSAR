@@ -80,8 +80,17 @@ def smiles_to_data(smiles: str, y: float, env_id: int, molecule_id: str, sample_
 
 
 def dataframe_to_graphs(df: pd.DataFrame, cfg: GraphBuildConfig) -> list[Data]:
+    work = df.copy()
+    if cfg.env_col in work.columns:
+        env_numeric = pd.to_numeric(work[cfg.env_col], errors="coerce")
+        if env_numeric.notna().all():
+            work[cfg.env_col] = env_numeric.fillna(-1).astype(int)
+        else:
+            # Step 11 can provide string environment labels, so encode them to stable integer ids for graph tensors.
+            work[cfg.env_col] = pd.Categorical(work[cfg.env_col].fillna("missing")).codes.astype(int)
+
     graphs = []
-    for row in df.itertuples(index=False):
+    for row in work.itertuples(index=False):
         d = smiles_to_data(
             getattr(row, cfg.smiles_col),
             float(getattr(row, cfg.label_col)),
