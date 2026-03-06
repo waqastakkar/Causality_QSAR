@@ -39,8 +39,30 @@ def _bool(s: str | bool) -> bool:
 
 
 def _mkdirs(root: Path):
-    for s in ["input", "processed", "predictions", "ranking", "figures", "figure_data", "provenance"]:
+    for s in ["input", "processed", "predictions", "ranking", "figures", "figure_data", "provenance", "artifacts"]:
         (root / s).mkdir(parents=True, exist_ok=True)
+
+
+def _write_screen_feature_schema(run_dirs: list[Path], out: Path) -> Path:
+    schema_paths = [rd / "artifacts" / "feature_schema.json" for rd in run_dirs]
+    missing = [str(p) for p in schema_paths if not p.exists()]
+    if missing:
+        raise SystemExit(
+            "missing required feature schema in run_dir artifacts: "
+            + ", ".join(missing)
+        )
+
+    schema_hashes = [_sha256(p) for p in schema_paths]
+    if len(set(schema_hashes)) != 1:
+        joined = ", ".join(f"{p}:{h}" for p, h in zip(schema_paths, schema_hashes))
+        raise SystemExit(
+            "cannot screen with mixed feature schemas across run_dirs; rerun Step 06 with a consistent schema. "
+            f"Resolved schema hashes: {joined}"
+        )
+
+    dest = out / "artifacts" / "feature_schema.json"
+    dest.write_text(schema_paths[0].read_text(encoding="utf-8"), encoding="utf-8")
+    return dest
 
 
 def parse_args():
@@ -203,6 +225,7 @@ def main():
     screen_id = args.screen_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(args.outdir) if Path(args.outdir).name == screen_id else Path(args.outdir) / args.target / screen_id
     _mkdirs(out)
+    _write_screen_feature_schema(run_dirs, out)
 
     style = style_from_args(args)
     configure_matplotlib(style, svg=True)
