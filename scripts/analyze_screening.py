@@ -18,6 +18,16 @@ from plot_style import add_plot_style_args, configure_matplotlib, style_axis, st
 from screening_compat import load_screening_tables, resolve_step12_screen_outputs
 
 
+SCORE_TABLE_CANDIDATES = (
+    "predictions/scored_with_uncertainty.parquet",
+    "predictions/scored_ensemble.parquet",
+    "predictions/predictions_ensemble.parquet",
+    "predictions/scored_single_model.parquet",
+    "predictions/predictions_seed1.parquet",
+    "ranking/ranked_all.parquet",
+)
+
+
 def _bool(x: str | bool) -> bool:
     if isinstance(x, bool):
         return x
@@ -93,6 +103,12 @@ def main() -> None:
 
     resolved = resolve_step12_screen_outputs(screen_dir)
     screen_dir = resolved["screen_dir"]
+    score_path = next((screen_dir / rel for rel in SCORE_TABLE_CANDIDATES if (screen_dir / rel).exists()), None)
+    if score_path is None:
+        raise SystemExit(
+            f"missing Step12 prediction table in {screen_dir}; expected one of: "
+            f"{', '.join(SCORE_TABLE_CANDIDATES)}"
+        )
     scored, ranked_all, ranked_cns_in = load_screening_tables(screen_dir)
     ranked_all = ranked_all.sort_values("canonical_score", ascending=False)
     ranked_cns_in = ranked_cns_in.sort_values("canonical_score", ascending=False)
