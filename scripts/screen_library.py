@@ -46,7 +46,9 @@ def _mkdirs(root: Path):
 def parse_args():
     p = argparse.ArgumentParser(description="Step 12b: screen prepared library")
     p.add_argument("--target", required=True)
-    p.add_argument("--run_dir", required=True)
+    p.add_argument("--run_dir", default=None)
+    p.add_argument("--run_dirs", nargs="+", default=None)
+    p.add_argument("--runs_root", default=None)
     p.add_argument("--prepared_library_path", default=None)
     p.add_argument("--input_path", default=None)
     p.add_argument("--input_format", choices=["smi", "csv"], default="csv")
@@ -71,7 +73,47 @@ def parse_args():
     p.add_argument("--ad_threshold", type=float, default=None)
     p.add_argument("--topk", type=int, default=500)
     add_plot_style_args(p)
-    return p.parse_args()
+    args = p.parse_args()
+    if args.run_dir and (args.run_dirs or args.runs_root):
+        raise SystemExit("--run_dir cannot be combined with --run_dirs/--runs_root")
+    if args.run_dirs and args.runs_root:
+        raise SystemExit("--run_dirs cannot be combined with --runs_root")
+    if not args.run_dir and not args.run_dirs and not args.runs_root:
+        raise SystemExit("one of --run_dir, --run_dirs, or --runs_root is required")
+    return args
+
+
+def _resolve_run_dirs(args: argparse.Namespace) -> list[Path]:
+    if args.run_dir:
+        candidates = [Path(args.run_dir)]
+    elif args.run_dirs:
+        candidates = [Path(p) for p in args.run_dirs]
+    else:
+        root = Path(args.runs_root)
+        if not root.exists():
+            raise SystemExit(f"runs_root does not exist: {root}")
+        candidates = [p for p in sorted(root.iterdir()) if p.is_dir()]
+
+    run_dirs: list[Path] = []
+    seen: set[str] = set()
+    for rd in candidates:
+        r = rd.resolve()
+        key = str(r)
+        if key in seen:
+            continue
+        if not r.is_dir():
+            raise SystemExit(f"run_dir is not a directory: {r}")
+        fs = r / "artifacts" / "feature_schema.json"
+        if not fs.exists():
+            raise SystemExit(f"missing required feature schema for screening: {fs}")
+        ckpt = r / "checkpoints" / "best.pt"
+        if not ckpt.exists():
+            raise SystemExit(f"missing required checkpoint for screening: {ckpt}")
+        seen.add(key)
+        run_dirs.append(r)
+    if not run_dirs:
+        raise SystemExit("no valid run directories resolved for screening")
+    return run_dirs
 
 
 def _load_deduplicated_library(args: argparse.Namespace, out: Path) -> tuple[pd.DataFrame, dict[str, int]]:
@@ -112,7 +154,8 @@ def _load_deduplicated_library(args: argparse.Namespace, out: Path) -> tuple[pd.
 
 def main():
     args = parse_args()
-    run_dir = Path(args.run_dir)
+    run_dirs = _resolve_run_dirs(args)
+    run_dir = run_dirs[0]
     screen_id = args.screen_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = Path(args.outdir) if Path(args.outdir).name == screen_id else Path(args.outdir) / args.target / screen_id
     _mkdirs(out)
@@ -128,11 +171,38 @@ def main():
     with_props.to_parquet(out / "processed/library_with_props.parquet", index=False)
 
     graphs, feat_df, feat_report = featurize_library(with_props, run_dir)
-    single, ens = run_inference(graphs, run_dir, ensemble_manifest=args.use_ensemble_manifest)
-    single.to_parquet(out / "predictions/scored_single_model.parquet", index=False)
-    ens.to_parquet(out / "predictions/scored_ensemble.parquet", index=False)
 
-    scored = feat_df.merge(ens[["compound_id", "score_mean", "score_std"]], on="compound_id", how="inner")
+    seed_frames: list[pd.DataFrame] = []
+    for idx, rd in enumerate(run_dirs, start=1):
+        single, ens = run_inference(graphs, rd, ensemble_manifest=args.use_ensemble_manifest)
+        pred_col = f"prediction_seed{idx}"
+        seed_pred = ens[["compound_id", "score_mean"]].rename(columns={"score_mean": pred_col})
+        seed_frames.append(seed_pred)
+        per_seed = single.rename(columns={"yhat_pIC50": "prediction"})
+        per_seed.insert(1, "model_label", f"seed{idx}")
+        per_seed.insert(2, "run_dir", str(rd))
+        per_seed.to_parquet(out / f"predictions/predictions_seed{idx}.parquet", index=False)
+        per_seed.to_csv(out / f"predictions/predictions_seed{idx}.csv", index=False)
+
+    ens_all = seed_frames[0]
+    for sf in seed_frames[1:]:
+        ens_all = ens_all.merge(sf, on="compound_id", how="inner")
+
+    pred_cols = [c for c in ens_all.columns if c.startswith("prediction_seed")]
+    ens_all["prediction_mean"] = ens_all[pred_cols].mean(axis=1)
+    ens_all["prediction_std"] = ens_all[pred_cols].std(axis=1).fillna(0.0)
+    ens_all["n_models"] = len(pred_cols)
+    ens_all["score_mean"] = ens_all["prediction_mean"]
+    ens_all["score_std"] = ens_all["prediction_std"]
+    ens_all.to_parquet(out / "predictions/predictions_ensemble.parquet", index=False)
+    ens_all.to_csv(out / "predictions/predictions_ensemble.csv", index=False)
+    ens_all.to_parquet(out / "predictions/scored_ensemble.parquet", index=False)
+
+    if len(run_dirs) == 1:
+        single_out = pd.read_parquet(out / "predictions/predictions_seed1.parquet")[["compound_id", "prediction"]].rename(columns={"prediction": "yhat_pIC50"})
+        single_out.to_parquet(out / "predictions/scored_single_model.parquet", index=False)
+
+    scored = feat_df.merge(ens_all[["compound_id", "prediction_mean", "prediction_std", "n_models", "score_mean", "score_std", *pred_cols]], on="compound_id", how="inner")
     scored["ad_distance"] = np.nan
     if _bool(args.compute_ad) and "fingerprint" in args.ad_mode:
         idx = build_or_load_train_fingerprint_index(run_dir)
@@ -187,14 +257,28 @@ def main():
         input_hash = _sha256(Path(args.input_path))
     elif args.prepared_library_path:
         input_hash = _sha256(Path(args.prepared_library_path))
+    run_artifact_hashes = {}
+    checkpoint_hashes = {}
+    for rd in run_dirs:
+        schema = rd / "artifacts/feature_schema.json"
+        resolved_cfg = rd / "configs/resolved_config.yaml"
+        ckpt = rd / "checkpoints/best.pt"
+        if schema.exists():
+            run_artifact_hashes[f"{rd}/artifacts/feature_schema.json"] = _sha256(schema)
+        if resolved_cfg.exists():
+            run_artifact_hashes[f"{rd}/configs/resolved_config.yaml"] = _sha256(resolved_cfg)
+        if ckpt.exists():
+            checkpoint_hashes[str(ckpt)] = _sha256(ckpt)
+
     prov = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "input_hash": input_hash,
-        "run_artifact_hashes": {str(p.relative_to(run_dir)): _sha256(p) for p in [run_dir / "artifacts/feature_schema.json", run_dir / "configs/resolved_config.yaml"] if p.exists()},
-        "checkpoint_hashes": {str(p): _sha256(Path(p)) for p in ([str(run_dir / "checkpoints/best.pt")] if not args.use_ensemble_manifest else json.loads(Path(args.use_ensemble_manifest).read_text()).get("checkpoint_paths", [])) if Path(p).exists()},
+        "run_dirs": [str(rd) for rd in run_dirs],
+        "run_artifact_hashes": run_artifact_hashes,
+        "checkpoint_hashes": checkpoint_hashes,
         "script_hashes": {str(Path(__file__).name): _sha256(Path(__file__))},
     }
     (out / "provenance/provenance.json").write_text(json.dumps(prov, indent=2), encoding="utf-8")
