@@ -218,6 +218,8 @@ def main() -> None:
     parser.add_argument("--attribution_target", default="z_inv")
     parser.add_argument("--max_counterfactuals", type=int, default=None)
     parser.add_argument("--max_compounds", type=int, default=None)
+    parser.add_argument("--max_rgroup_compounds", type=int, default=2000)
+    parser.add_argument("--max_rgroup_per_series", type=int, default=250)
     parser.add_argument("--skip_attribution", action="store_true")
     parser.add_argument("--skip_shape", action="store_true")
     parser.add_argument("--skip_fragments", action="store_true")
@@ -340,8 +342,24 @@ def main() -> None:
     style = style_from_args(args)
     configure_matplotlib(style, svg=True)
 
+    # R-group decomposition can spike memory usage for large tables.
+    # Use a bounded copy of the dataframe for this stage only.
+    rgroup_df = df
+    if args.max_rgroup_per_series and args.max_rgroup_per_series > 0 and "series_id" in rgroup_df.columns:
+        per_series = int(args.max_rgroup_per_series)
+        rgroup_df = (
+            rgroup_df.sort_values(["series_id", "molecule_id"]).groupby("series_id", sort=False, dropna=False).head(per_series).copy()
+        )
+        _log_stage(f"R-group per-series cap active: max_rgroup_per_series={per_series}, rows={len(rgroup_df)}")
+    if args.max_rgroup_compounds and args.max_rgroup_compounds > 0 and len(rgroup_df) > args.max_rgroup_compounds:
+        cap = int(args.max_rgroup_compounds)
+        rgroup_df = rgroup_df.head(cap).copy()
+        _log_stage(f"R-group global cap active: max_rgroup_compounds={cap}, rows={len(rgroup_df)}")
+
     _log_stage("Running R-group analysis")
-    rgo = run_rgroup_analysis(df, series_min_n=args.rgroup_series_min_n)
+    rgo = run_rgroup_analysis(rgroup_df, series_min_n=args.rgroup_series_min_n)
+    del rgroup_df
+    gc.collect()
     rgo.series_scaffolds.to_csv(outdir / "rgroup" / "series_scaffolds.csv", index=False)
     rgo.rgroup_table.to_parquet(outdir / "rgroup" / "rgroup_table.parquet", index=False)
     rgo.effects.to_csv(outdir / "rgroup" / "rgroup_effects.csv", index=False)
