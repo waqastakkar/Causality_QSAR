@@ -53,13 +53,14 @@ def fingerprint_ad(train_df: pd.DataFrame, test_df: pd.DataFrame, radius: int = 
             if fp is not None:
                 train_fp.append(fp)
 
-    dists = []
-    for s in test_df["smiles"].fillna(""):
+    dists = np.full(len(test_df), np.nan, dtype=float)
+    smiles_series = test_df["smiles"].fillna("")
+    for i, s in enumerate(smiles_series):
         fp = _fp_from_smiles(s, radius=radius, nbits=nbits)
         if fp is None or not train_fp:
-            dists.append(np.nan); continue
+            continue
         sims = DataStructs.BulkTanimotoSimilarity(fp, train_fp)
-        dists.append(1.0 - float(max(sims)) if sims else np.nan)
+        dists[i] = 1.0 - float(max(sims)) if sims else np.nan
     out["ad_distance_fingerprint"] = dists
     return out
 
