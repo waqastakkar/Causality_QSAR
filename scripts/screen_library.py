@@ -116,13 +116,57 @@ def _resolve_run_dirs(args: argparse.Namespace) -> list[Path]:
     return run_dirs
 
 
+
+
+def _normalize_prepared_library_smiles(df: pd.DataFrame, source_path: str | None = None) -> tuple[pd.DataFrame, dict[str, int]]:
+    out = df.copy()
+    if "canonical_smiles" not in out.columns:
+        raise SystemExit("prepared library is missing required column: canonical_smiles")
+
+    initial_rows = len(out)
+    null_mask = out["canonical_smiles"].isna()
+    out = out.loc[~null_mask].copy()
+    out["canonical_smiles"] = out["canonical_smiles"].astype(str).str.strip()
+
+    header_like_mask = out["canonical_smiles"].str.lower().eq("canonical_smiles") | out["canonical_smiles"].str.lower().eq("smiles")
+    empty_mask = out["canonical_smiles"].eq("")
+
+    removed_null = int(null_mask.sum())
+    removed_header = int(header_like_mask.sum())
+    removed_empty = int(empty_mask.sum())
+
+    out = out.loc[~(header_like_mask | empty_mask)].copy()
+
+    if source_path and str(source_path).lower().endswith(".csv") and removed_header > 0:
+        raise SystemExit(
+            "prepared library CSV appears malformed: header row values were retained in canonical_smiles. "
+            "Regenerate the prepared library with correct CSV header handling before screening."
+        )
+
+    if out.empty:
+        src = f" from {source_path}" if source_path else ""
+        raise SystemExit(
+            "prepared library validation removed all rows; check CSV header handling and smiles/canonical_smiles column formatting"
+            f"{src}"
+        )
+
+    report = {
+        "prepared_rows_input": int(initial_rows),
+        "prepared_rows_removed_null_smiles": removed_null,
+        "prepared_rows_removed_header_like": removed_header,
+        "prepared_rows_removed_empty_smiles": removed_empty,
+        "prepared_rows_after_smiles_validation": int(len(out)),
+    }
+    return out, report
 def _load_deduplicated_library(args: argparse.Namespace, out: Path) -> tuple[pd.DataFrame, dict[str, int]]:
     if args.prepared_library_path:
         p = Path(args.prepared_library_path)
         if not p.exists():
             raise SystemExit(f"missing required prepared library file: {p}")
         dedup = pd.read_parquet(p)
-        return dedup, {"clean_dedup_rows": int(len(dedup)), "prepared_input_mode": 1}
+        dedup, prep_report = _normalize_prepared_library_smiles(dedup, source_path=str(p))
+        report = {"clean_dedup_rows": int(len(dedup)), "prepared_input_mode": 1, **prep_report}
+        return dedup, report
 
     if not args.input_path:
         raise SystemExit("either --prepared_library_path or --input_path must be provided")
@@ -164,6 +208,14 @@ def main():
     configure_matplotlib(style, svg=True)
 
     dedup, clean_report = _load_deduplicated_library(args, out)
+    if "prepared_rows_removed_header_like" in clean_report:
+        print(
+            "Prepared-library smiles validation: "
+            f"removed_null={clean_report.get('prepared_rows_removed_null_smiles', 0)}, "
+            f"removed_header_like={clean_report.get('prepared_rows_removed_header_like', 0)}, "
+            f"removed_empty={clean_report.get('prepared_rows_removed_empty_smiles', 0)}, "
+            f"remaining={clean_report.get('prepared_rows_after_smiles_validation', len(dedup))}"
+        )
 
     with_props = compute_properties(dedup, smiles_col="canonical_smiles")
     if _bool(args.compute_bbb):
@@ -204,9 +256,16 @@ def main():
 
     scored = feat_df.merge(ens_all[["compound_id", "prediction_mean", "prediction_std", "n_models", "score_mean", "score_std", *pred_cols]], on="compound_id", how="inner")
     scored["ad_distance"] = np.nan
+    ad_invalid_smiles_rows = 0
     if _bool(args.compute_ad) and "fingerprint" in args.ad_mode:
+        if "canonical_smiles" not in scored.columns:
+            raise SystemExit("missing required column for fingerprint AD: canonical_smiles")
+        ad_input = scored[["compound_id", "canonical_smiles"]].rename(columns={"compound_id": "molecule_id", "canonical_smiles": "smiles"}).copy()
+        ad_input["smiles"] = ad_input["smiles"].astype(str).str.strip()
+        invalid_ad_mask = ad_input["smiles"].eq("") | ad_input["smiles"].str.lower().eq("smiles")
+        ad_invalid_smiles_rows = int(invalid_ad_mask.sum())
         idx = build_or_load_train_fingerprint_index(run_dir)
-        ad = fingerprint_ad(idx, scored.rename(columns={"canonical_smiles": "smiles", "compound_id": "molecule_id"}))
+        ad = fingerprint_ad(idx, ad_input)
         scored = scored.merge(ad.rename(columns={"molecule_id": "compound_id", "ad_distance_fingerprint": "ad_distance"}), on="compound_id", how="left")
     scored.to_parquet(out / "predictions/scored_with_uncertainty.parquet", index=False)
 
@@ -217,7 +276,7 @@ def main():
     ranks["best"].head(500).to_csv(out / "ranking/top_500.csv", index=False)
     sel.to_csv(out / "ranking/selection_report.csv", index=False)
 
-    report = {**clean_report, **feat_report, "final_scored_count": int(len(scored))}
+    report = {**clean_report, **feat_report, "ad_invalid_smiles_rows": int(ad_invalid_smiles_rows), "final_scored_count": int(len(scored))}
     pd.DataFrame([{"metric": k, "value": v} for k, v in report.items()]).to_csv(out / "processed/featurization_report.csv", index=False)
 
     s = scored[["score_mean"]].dropna(); s.to_csv(out / "figure_data/score_distribution.csv", index=False)
@@ -272,6 +331,7 @@ def main():
 
     prov = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "warnings": ([f"fingerprint_ad_invalid_smiles_rows={ad_invalid_smiles_rows}"] if ad_invalid_smiles_rows else []),
         "python": platform.python_version(),
         "platform": platform.platform(),
         "git_commit": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
