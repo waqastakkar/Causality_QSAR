@@ -58,4 +58,9 @@ for RUN_DIR in "${RUN_DIRS[@]}"; do
   CMD+=("${STYLE_FLAGS[@]}")
   manual_append_overrides EXTRA_ARGS CMD
   manual_run_with_log "$LOG_FILE" "${CMD[@]}"
+
+  # Persist pointers so downstream steps can resolve the exact interpret artifacts
+  # without guessing by checkpoint IDs.
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/latest_run.json" "$OUTDIR" "step10_interpret"
+  manual_write_run_pointer "$PYTHON_BIN" "$STEP_OUT/$SPLIT_NAME/latest_run.json" "$OUTDIR" "step10_interpret"
 done
