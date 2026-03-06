@@ -11,5 +11,11 @@ PY
 )"
 STEP_OUT="$OUTPUTS_ROOT/step15"; LOG_FILE="$STEP_OUT/step15_manuscript.log"; mkdir -p "$STEP_OUT"
 manual_require_dir "$OUTPUTS_ROOT/step6" "run step06 first"
+SCREEN_DIR=""
+if [[ -d "$OUTPUTS_ROOT/step12" ]]; then
+  EXPLICIT_SCREEN_DIR="$(manual_get_override screen_dir "${EXTRA_ARGS[@]}")"
+  SCREEN_DIR="$(manual_resolve_step12_screen_dir "$PYTHON_BIN" "$OUTPUTS_ROOT/step12" "$EXPLICIT_SCREEN_DIR" || true)"
+fi
 CMD=("$PYTHON_BIN" "scripts/build_manuscript_pack.py" "--config" "$CONFIG" "${STYLE_FLAGS[@]}")
+[[ -n "$SCREEN_DIR" ]] && CMD+=("--screen_dir" "$SCREEN_DIR")
 manual_append_overrides EXTRA_ARGS CMD; manual_run_with_log "$LOG_FILE" "${CMD[@]}"

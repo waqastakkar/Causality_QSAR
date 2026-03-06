@@ -301,3 +301,25 @@ for name in selected:
     print(name)
 PY
 }
+
+manual_resolve_step12_screen_dir() {
+  local python_bin="$1"
+  local step12_root="$2"
+  local explicit_screen_dir="${3:-}"
+  "$python_bin" - "$step12_root" "$explicit_screen_dir" <<'PY'
+import sys
+from pathlib import Path
+
+repo_root = Path.cwd()
+scripts_dir = repo_root / "scripts"
+if str(scripts_dir) not in sys.path:
+    sys.path.insert(0, str(scripts_dir))
+
+from screening_compat import resolve_step12_screen_outputs
+
+step12_root = Path(sys.argv[1])
+explicit = sys.argv[2] or None
+resolved = resolve_step12_screen_outputs(step12_root, explicit_screen_dir=explicit)
+print(str(resolved["screen_dir"]))
+PY
+}
