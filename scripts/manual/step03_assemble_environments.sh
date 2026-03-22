@@ -45,4 +45,6 @@ fi
 manual_append_overrides EXTRA_ARGS CMD
 manual_run_with_log "$LOG_FILE" "${CMD[@]}"
 manual_require_file "$STEP_OUT/multienv_compound_level.parquet"
-manual_require_columns "$PYTHON_BIN" "$STEP_OUT/multienv_compound_level.parquet" "molecule_id,smiles,pIC50,env_id_manual"
+manual_require_file "$STEP_OUT/multienv_row_level.parquet"
+manual_require_columns "$PYTHON_BIN" "$STEP_OUT/multienv_compound_level.parquet" "row_uid,molecule_id,smiles,pIC50,env_id_manual"
+manual_require_columns "$PYTHON_BIN" "$STEP_OUT/multienv_row_level.parquet" "row_uid,env_id_manual"
