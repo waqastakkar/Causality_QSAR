@@ -105,6 +105,27 @@ def ensure_molecule_id(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def add_compound_row_uid(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "molecule_id" not in out.columns:
+        raise ValueError("Cannot create row_uid without canonical molecule_id")
+    out["row_uid"] = "compound::" + out["molecule_id"].astype(str)
+    dup_count = int(out["row_uid"].duplicated(keep=False).sum())
+    if dup_count > 0:
+        raise ValueError(f"compound-level row_uid must be unique; found {dup_count} duplicate rows")
+    return out
+
+
+def add_row_level_uid(df: pd.DataFrame, molecule_col: str) -> pd.DataFrame:
+    out = df.copy()
+    mol = out[molecule_col].fillna("unknown_molecule").astype(str)
+    out["row_uid"] = "row::" + mol + "::" + out.index.to_series().astype(str)
+    dup_count = int(out["row_uid"].duplicated(keep=False).sum())
+    if dup_count > 0:
+        raise ValueError(f"row-level row_uid must be unique; found {dup_count} duplicate rows")
+    return out
+
+
 def compute_scaffold(smiles: Any) -> str:
     s = str(smiles).strip()
     if not s or s == "nan":
@@ -195,6 +216,7 @@ def main() -> None:
 
     # canonical compound identifier
     comp_df = ensure_molecule_id(comp_df)
+    comp_df = add_compound_row_uid(comp_df)
     id_col = "molecule_id"
 
     smiles_col = pick_col(comp_df, ["canonical_smiles", "smiles"])
@@ -269,6 +291,7 @@ def main() -> None:
     attach_cols = [id_col, "env_id_manual", "env_id", *env_keys, "scaffold_id"]
     attach_cols = [c for c in attach_cols if c in comp_df.columns]
     merged_row = row_df.merge(comp_df[attach_cols].drop_duplicates(id_col), left_on=row_id_col, right_on=id_col, how="left")
+    merged_row = add_row_level_uid(merged_row, row_id_col if row_id_col in merged_row.columns else id_col)
 
     merged_row.to_parquet(outdir / "multienv_row_level.parquet", index=False)
     comp_df.to_parquet(outdir / "multienv_compound_level.parquet", index=False)

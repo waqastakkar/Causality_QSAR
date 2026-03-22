@@ -134,7 +134,8 @@ def main() -> int:
     failed += print_check("step01_output", *cols_ok(out / "step1" / f"{target}_qsar_ready.csv", ["canonical_smiles", "standard_type", "standard_value"]))
     failed += print_check("step02_output", *cols_ok(out / "step2" / "compound_level_with_properties.csv", ["canonical_smiles", "pIC50"]))
     failed += print_check("step02_primary_contract", *step2_contract_ok(out / "step2" / "row_level_primary.csv", max_value_nm))
-    failed += print_check("step03_output", *cols_ok(out / "step3" / "multienv_compound_level.parquet", ["molecule_id", "smiles", "pIC50"]))
+    failed += print_check("step03_output", *cols_ok(out / "step3" / "multienv_compound_level.parquet", ["row_uid", "molecule_id", "smiles", "pIC50"]))
+    failed += print_check("step03_row_level_output", *cols_ok(out / "step3" / "multienv_row_level.parquet", ["row_uid", "env_id_manual"]))
 
     if split_manifest.exists():
         sm = json.loads(split_manifest.read_text(encoding="utf-8"))
